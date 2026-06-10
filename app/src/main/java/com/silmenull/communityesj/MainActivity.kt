@@ -103,6 +103,7 @@ import com.silmenull.communityesj.data.BookItem
 import com.silmenull.communityesj.data.BookshelfPage
 import com.silmenull.communityesj.data.ChapterLink
 import com.silmenull.communityesj.data.EsjRepository
+import com.silmenull.communityesj.data.EsjHost
 import com.silmenull.communityesj.data.LoginExpiredException
 import com.silmenull.communityesj.data.LoginSessionState
 import com.silmenull.communityesj.data.ReaderChapter
@@ -178,6 +179,7 @@ private class AppState(
     var readerScrollProgress by mutableFloatStateOf(0f)
     var readerDarkMode by mutableStateOf(repository.isReaderDarkMode())
     var bookshelfReloginAction by mutableStateOf(false)
+    var selectedHost by mutableStateOf(repository.currentHost())
 }
 
 @Composable
@@ -192,6 +194,17 @@ private fun EsjReaderApp() {
         }.onFailure { error ->
             appState.message = error.userMessage("无法打开网页")
         }
+    }
+
+    fun switchHost(host: EsjHost) {
+        if (!appState.repository.switchHost(host)) return
+        appState.selectedHost = appState.repository.currentHost()
+        appState.screen = Screen.Login
+        appState.message = "已切换到${host.displayName},请重新登录"
+        appState.bookshelfReloginAction = false
+        appState.readerChapter = null
+        appState.bookshelf = BookshelfPage(emptyList(), 1, 1)
+        appState.currentPage = 1
     }
 
     fun loadBookshelf(page: Int = 1, goLoginOnFailure: Boolean = false) {
@@ -302,6 +315,8 @@ private fun EsjReaderApp() {
                 Screen.Login -> LoginScreen(
                     isLoading = appState.isLoading,
                     message = appState.message,
+                    currentHost = appState.selectedHost,
+                    onHostChange = ::switchHost,
                     onLogin = { email, password ->
                         scope.launch {
                             appState.isLoading = true
@@ -329,7 +344,9 @@ private fun EsjReaderApp() {
                     onRefresh = { loadBookshelf(appState.currentPage) },
                     onPage = { loadBookshelf(it) },
                     onOpenBook = ::openBook,
-                    onOpenWeb = { openWeb("https://www.esjzone.cc/my/favorite") },
+                    onOpenWeb = { openWeb(appState.repository.favoriteUrl()) },
+                    currentHost = appState.selectedHost,
+                    onHostChange = ::switchHost,
                     showReloginAction = appState.bookshelfReloginAction,
                     onRelogin = {
                         appState.repository.logout()
@@ -387,10 +404,13 @@ private fun EsjReaderApp() {
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun LoginScreen(
     isLoading: Boolean,
     message: String?,
+    currentHost: EsjHost,
+    onHostChange: (EsjHost) -> Unit,
     onLogin: (String, String) -> Unit,
 ) {
     var email by remember { mutableStateOf("") }
@@ -398,6 +418,17 @@ private fun LoginScreen(
 
     Scaffold(
         modifier = Modifier.fillMaxSize(),
+        topBar = {
+            TopAppBar(
+                title = { Text("ESJ 轻阅") },
+                actions = {
+                    HostMenuButton(
+                        currentHost = currentHost,
+                        onHostChange = onHostChange,
+                    )
+                },
+            )
+        },
         contentWindowInsets = WindowInsets.statusBars,
     ) { innerPadding ->
         Column(
@@ -408,14 +439,20 @@ private fun LoginScreen(
             verticalArrangement = Arrangement.Center,
         ) {
             Text(
-                text = "CommunityESJ",
+                text = "ESJ 轻阅",
                 style = MaterialTheme.typography.headlineMedium,
                 fontWeight = FontWeight.Bold,
             )
             Text(
-                text = "ESJ Zone 阅读客户端",
+                text = "ESJ Read",
                 modifier = Modifier.padding(top = 8.dp),
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                text = currentHost.displayName,
+                modifier = Modifier.padding(top = 6.dp),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontSize = 13.sp,
             )
             Spacer(Modifier.height(28.dp))
             OutlinedTextField(
@@ -471,6 +508,8 @@ private fun BookshelfScreen(
     onPage: (Int) -> Unit,
     onOpenBook: (BookItem) -> Unit,
     onOpenWeb: () -> Unit,
+    currentHost: EsjHost,
+    onHostChange: (EsjHost) -> Unit,
     showReloginAction: Boolean,
     onRelogin: () -> Unit,
     onOpenGithub: () -> Unit,
@@ -498,6 +537,15 @@ private fun BookshelfScreen(
                                     onOpenWeb()
                                 },
                             )
+                            HorizontalDivider()
+                            HostMenuItems(
+                                currentHost = currentHost,
+                                onHostChange = { host ->
+                                    menuExpanded = false
+                                    onHostChange(host)
+                                },
+                            )
+                            HorizontalDivider()
                             DropdownMenuItem(
                                 text = { Text("退出登录") },
                                 onClick = {
@@ -570,7 +618,7 @@ private fun BookshelfScreen(
             title = { Text("关于") },
             text = {
                 Column {
-                    Text("CommunityESJ 是一个简化的 ESJ Zone 阅读客户端，仅包含登录、书架和阅读页。")
+                    Text("ESJ 轻阅是一个简化的 ESJ Zone 阅读客户端，仅包含登录、书架和阅读页。")
                     Spacer(Modifier.height(12.dp))
                     Text("GitHub")
                     Text(
@@ -591,6 +639,55 @@ private fun BookshelfScreen(
                     Text("确定")
                 }
             },
+        )
+    }
+}
+
+@Composable
+private fun HostMenuButton(
+    currentHost: EsjHost,
+    onHostChange: (EsjHost) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+
+    Box {
+        TextButton(onClick = { expanded = true }) {
+            Text(currentHost.displayName)
+        }
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+        ) {
+            HostMenuItems(
+                currentHost = currentHost,
+                onHostChange = { host ->
+                    expanded = false
+                    onHostChange(host)
+                },
+            )
+        }
+    }
+}
+
+@Composable
+private fun HostMenuItems(
+    currentHost: EsjHost,
+    onHostChange: (EsjHost) -> Unit,
+) {
+    EsjHost.entries.forEach { host ->
+        DropdownMenuItem(
+            text = {
+                Column {
+                    Text(host.displayName)
+                    Text(
+                        text = host.host,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontSize = 12.sp,
+                    )
+                }
+            },
+            onClick = { onHostChange(host) },
+            enabled = host != currentHost,
         )
     }
 }

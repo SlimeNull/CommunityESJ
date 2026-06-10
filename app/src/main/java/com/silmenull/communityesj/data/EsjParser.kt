@@ -7,7 +7,6 @@ import org.jsoup.nodes.Node
 import org.jsoup.nodes.TextNode
 
 object EsjParser {
-    private const val BASE_URL = "https://www.esjzone.cc"
     private val loginRedirectRegex = Regex(
         pattern = """\b(?:window\.)?location(?:\.href)?\s*=\s*['"][^'"]*login[^'"]*['"]""",
         options = setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL),
@@ -22,8 +21,8 @@ object EsjParser {
             ?.takeIf { it.isNotEmpty() }
     }
 
-    fun parseBookshelf(html: String, page: Int): BookshelfPage {
-        val doc = Jsoup.parse(html, BASE_URL)
+    fun parseBookshelf(html: String, page: Int, baseUrl: String): BookshelfPage {
+        val doc = Jsoup.parse(html, baseUrl)
         val productItems = doc.select("div.product-item")
         val books = productItems.mapNotNull { parseFavoriteItem(it) }
 
@@ -38,8 +37,8 @@ object EsjParser {
         return loginRedirectRegex.containsMatchIn(html)
     }
 
-    fun parseChapters(html: String): List<ChapterLink> {
-        val doc = Jsoup.parse(html, BASE_URL)
+    fun parseChapters(html: String, baseUrl: String): List<ChapterLink> {
+        val doc = Jsoup.parse(html, baseUrl)
         val chapterLinks = doc.select("#chapterList a[href]")
             .ifEmpty { doc.select("a[href*=/forum/]") }
 

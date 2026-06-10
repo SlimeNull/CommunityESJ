@@ -59,3 +59,20 @@ enum class LoginSessionState {
     EXPIRED,
     MISSING,
 }
+
+enum class EsjHost(
+    val displayName: String,
+    val host: String,
+) {
+    MAGIC("魔法线路", "www.esjzone.cc"),
+    DIRECT("直连线路", "www.esjzone.one");
+
+    val baseUrl: String
+        get() = "https://$host"
+
+    companion object {
+        fun fromHost(host: String?): EsjHost {
+            return entries.firstOrNull { it.host == host } ?: MAGIC
+        }
+    }
+}
