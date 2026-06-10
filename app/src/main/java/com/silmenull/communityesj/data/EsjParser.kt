@@ -3,6 +3,8 @@ package com.silmenull.communityesj.data
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
+import org.jsoup.nodes.Node
+import org.jsoup.nodes.TextNode
 
 object EsjParser {
     private const val BASE_URL = "https://www.esjzone.cc"
@@ -49,12 +51,7 @@ object EsjParser {
             ?.takeIf { it.isNotBlank() }
 
         val contentElement = doc.selectFirst(".forum-content")
-        val paragraphElements = contentElement?.select("p")
-        val paragraphs = paragraphElements
-            ?.takeIf { it.isNotEmpty() }
-            ?.mapNotNull { it.wholeText().cleanText().takeIf(String::isNotBlank) }
-            ?: contentElement?.wholeText()?.split('\n')?.mapNotNull { it.cleanText().takeIf(String::isNotBlank) }
-            ?: emptyList()
+        val contentBlocks = contentElement?.let { parseContentBlocks(it) }.orEmpty()
 
         val chapterTitle = doc.selectFirst("h2")?.text()?.cleanText()
             ?: doc.title().substringBefore(" - ESJ Zone").substringAfterLast(" - ").cleanText()
@@ -74,7 +71,7 @@ object EsjParser {
             url = fallbackUrl,
             bookTitle = bookTitle,
             chapterTitle = chapterTitle,
-            paragraphs = paragraphs,
+            contentBlocks = contentBlocks,
             chapters = emptyList(),
             previousUrl = previous,
             nextUrl = next,
@@ -112,6 +109,59 @@ object EsjParser {
             detailUrl = detailLink?.absUrl("href")?.takeIf { it.isNotBlank() },
             latestChapterUrl = latestLink?.absUrl("href")?.takeIf { it.isNotBlank() },
             lastReadChapterUrl = lastReadLink?.absUrl("href")?.takeIf { it.isNotBlank() },
+        )
+    }
+
+    private fun parseContentBlocks(contentElement: Element): List<ReaderContentBlock> {
+        val blocks = mutableListOf<ReaderContentBlock>()
+        contentElement.childNodes().forEach { node ->
+            appendContentNode(node, blocks)
+        }
+        if (blocks.isNotEmpty()) return blocks
+
+        return contentElement.wholeText()
+            .split('\n')
+            .mapNotNull { it.cleanText().takeIf(String::isNotBlank) }
+            .map { ReaderContentBlock.Text(it) }
+    }
+
+    private fun appendContentNode(node: Node, blocks: MutableList<ReaderContentBlock>) {
+        when (node) {
+            is TextNode -> {
+                node.wholeText.cleanText()
+                    .takeIf(String::isNotBlank)
+                    ?.let { blocks.add(ReaderContentBlock.Text(it)) }
+            }
+
+            is Element -> {
+                when (node.tagName().lowercase()) {
+                    "img" -> node.toImageBlock()?.let(blocks::add)
+                    "br" -> Unit
+                    "p" -> appendParagraph(node, blocks)
+                    else -> node.childNodes().forEach { appendContentNode(it, blocks) }
+                }
+            }
+        }
+    }
+
+    private fun appendParagraph(paragraph: Element, blocks: MutableList<ReaderContentBlock>) {
+        val images = paragraph.select("img[src]")
+        if (images.isEmpty()) {
+            paragraph.wholeText().cleanText()
+                .takeIf(String::isNotBlank)
+                ?.let { blocks.add(ReaderContentBlock.Text(it)) }
+            return
+        }
+
+        paragraph.childNodes().forEach { appendContentNode(it, blocks) }
+    }
+
+    private fun Element.toImageBlock(): ReaderContentBlock.Image? {
+        val src = absUrl("src").ifBlank { attr("src") }
+        if (src.isBlank()) return null
+        return ReaderContentBlock.Image(
+            url = src,
+            alt = attr("alt").cleanText(),
         )
     }
 

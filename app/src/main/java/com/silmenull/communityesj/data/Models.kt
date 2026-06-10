@@ -26,12 +26,20 @@ data class ReaderChapter(
     val url: String,
     val bookTitle: String,
     val chapterTitle: String,
-    val paragraphs: List<String>,
+    val contentBlocks: List<ReaderContentBlock>,
     val chapters: List<ChapterLink>,
     val previousUrl: String?,
     val nextUrl: String?,
     val detailUrl: String?,
-)
+) {
+    val paragraphs: List<String>
+        get() = contentBlocks.mapNotNull { (it as? ReaderContentBlock.Text)?.text }
+}
+
+sealed interface ReaderContentBlock {
+    data class Text(val text: String) : ReaderContentBlock
+    data class Image(val url: String, val alt: String = "") : ReaderContentBlock
+}
 
 data class LoginResult(
     val success: Boolean,
