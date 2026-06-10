@@ -135,7 +135,7 @@ class LocalStore(context: Context) {
             .put("url", url)
             .put("bookTitle", bookTitle)
             .put("chapterTitle", chapterTitle)
-            .put("paragraphs", JSONArray(paragraphs))
+            .put("contentBlocks", JSONArray(contentBlocks.map { it.toJson() }))
             .put("chapters", JSONArray(chapters.map { it.toJson() }))
             .put("previousUrl", previousUrl)
             .put("nextUrl", nextUrl)
@@ -143,18 +143,15 @@ class LocalStore(context: Context) {
     }
 
     private fun JSONObject.toReaderChapter(): ReaderChapter {
-        val paragraphArray = optJSONArray("paragraphs") ?: JSONArray()
         val chapterArray = optJSONArray("chapters") ?: JSONArray()
+        val blockArray = optJSONArray("contentBlocks")
+        val legacyParagraphArray = optJSONArray("paragraphs")
 
         return ReaderChapter(
             url = optString("url"),
             bookTitle = optString("bookTitle"),
             chapterTitle = optString("chapterTitle"),
-            paragraphs = buildList {
-                for (index in 0 until paragraphArray.length()) {
-                    add(paragraphArray.optString(index))
-                }
-            },
+            contentBlocks = readContentBlocks(blockArray, legacyParagraphArray),
             chapters = buildList {
                 for (index in 0 until chapterArray.length()) {
                     val item = chapterArray.optJSONObject(index) ?: continue
@@ -169,5 +166,46 @@ class LocalStore(context: Context) {
             nextUrl = optString("nextUrl").takeIf { it.isNotBlank() && it != "null" },
             detailUrl = optString("detailUrl").takeIf { it.isNotBlank() && it != "null" },
         )
+    }
+
+    private fun ReaderContentBlock.toJson(): JSONObject {
+        return when (this) {
+            is ReaderContentBlock.Text -> JSONObject()
+                .put("type", "text")
+                .put("text", text)
+
+            is ReaderContentBlock.Image -> JSONObject()
+                .put("type", "image")
+                .put("url", url)
+                .put("alt", alt)
+        }
+    }
+
+    private fun readContentBlocks(blockArray: JSONArray?, legacyParagraphArray: JSONArray?): List<ReaderContentBlock> {
+        if (blockArray != null) {
+            return buildList {
+                for (index in 0 until blockArray.length()) {
+                    val item = blockArray.optJSONObject(index) ?: continue
+                    when (item.optString("type")) {
+                        "text" -> item.optString("text")
+                            .takeIf { it.isNotBlank() }
+                            ?.let { add(ReaderContentBlock.Text(it)) }
+
+                        "image" -> item.optString("url")
+                            .takeIf { it.isNotBlank() }
+                            ?.let { add(ReaderContentBlock.Image(it, item.optString("alt"))) }
+                    }
+                }
+            }
+        }
+
+        return buildList {
+            val paragraphs = legacyParagraphArray ?: JSONArray()
+            for (index in 0 until paragraphs.length()) {
+                paragraphs.optString(index)
+                    .takeIf { it.isNotBlank() }
+                    ?.let { add(ReaderContentBlock.Text(it)) }
+            }
+        }
     }
 }

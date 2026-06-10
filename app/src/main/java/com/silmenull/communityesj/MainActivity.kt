@@ -1,8 +1,13 @@
 package com.silmenull.communityesj
 
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.drawable.BitmapDrawable
+import android.provider.MediaStore
 import android.net.Uri
 import android.os.Bundle
+import android.content.ContentValues
+import android.os.Environment
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
@@ -20,6 +25,7 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -41,6 +47,13 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.DarkMode
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.LightMode
+import androidx.compose.material.icons.automirrored.filled.List
+import androidx.compose.material.icons.filled.SkipNext
+import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -54,6 +67,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -72,7 +87,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -85,10 +104,18 @@ import com.silmenull.communityesj.data.ChapterLink
 import com.silmenull.communityesj.data.EsjRepository
 import com.silmenull.communityesj.data.LoginSessionState
 import com.silmenull.communityesj.data.ReaderChapter
+import com.silmenull.communityesj.data.ReaderContentBlock
 import com.silmenull.communityesj.data.ReadingProgress
 import com.silmenull.communityesj.ui.theme.CommunityESJTheme
+import coil.compose.AsyncImage
+import coil.imageLoader
+import coil.request.ImageRequest
+import coil.request.SuccessResult
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.IOException
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
@@ -257,7 +284,7 @@ private fun EsjReaderApp() {
     Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         AnimatedContent(
             targetState = appState.screen,
-            transitionSpec = { screenTransition() },
+            transitionSpec = { screenTransition(initialState, targetState) },
             label = "screen_transition",
         ) { screen ->
             when (screen) {
@@ -613,9 +640,13 @@ private fun ReaderScreen(
 ) {
     var controlsVisible by remember { mutableStateOf(false) }
     var chapterSheetVisible by remember { mutableStateOf(false) }
+    var imageViewerUrl by remember { mutableStateOf<String?>(null) }
+    var imageSaveMessage by remember { mutableStateOf<String?>(null) }
     val listState = rememberLazyListState()
     val interactionSource = remember { MutableInteractionSource() }
     val colors = readerColors(darkMode)
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
 
     BackHandler(onBack = onBack)
 
@@ -691,14 +722,21 @@ private fun ReaderScreen(
                         Spacer(Modifier.height(24.dp))
                     }
                 }
-                items(chapter.paragraphs) { paragraph ->
-                    Text(
-                        text = paragraph,
-                        modifier = Modifier.padding(bottom = 14.dp),
-                        color = colors.text,
-                        fontSize = 19.sp,
-                        lineHeight = 32.sp,
-                    )
+                items(chapter.contentBlocks) { block ->
+                    when (block) {
+                        is ReaderContentBlock.Text -> Text(
+                            text = block.text,
+                            modifier = Modifier.padding(bottom = 14.dp),
+                            color = colors.text,
+                            fontSize = 19.sp,
+                            lineHeight = 32.sp,
+                        )
+
+                        is ReaderContentBlock.Image -> ReaderImage(
+                            block = block,
+                            onClick = { imageViewerUrl = block.url },
+                        )
+                    }
                 }
                 if (message != null) {
                     item { MessageText(message) }
@@ -793,6 +831,29 @@ private fun ReaderScreen(
             }
         }
     }
+
+    val currentImage = imageViewerUrl
+    if (currentImage != null) {
+        ImageViewer(
+            imageUrl = currentImage,
+            message = imageSaveMessage,
+            onDismiss = {
+                imageViewerUrl = null
+                imageSaveMessage = null
+            },
+            onSave = {
+                scope.launch {
+                    imageSaveMessage = "保存中..."
+                    imageSaveMessage = runCatching {
+                        saveImageToGallery(context, currentImage)
+                        "已保存到相册"
+                    }.getOrElse { error ->
+                        error.userMessage("保存失败")
+                    }
+                }
+            },
+        )
+    }
 }
 
 @Composable
@@ -886,7 +947,7 @@ private fun ReaderControls(
                     shape = RoundedCornerShape(8.dp),
                     colors = buttonColors,
                 ) {
-                    Text("目录")
+                    Icon(Icons.AutoMirrored.Filled.List, contentDescription = "目录")
                 }
                 Button(
                     onClick = { onDarkModeChange(!darkMode) },
@@ -894,7 +955,10 @@ private fun ReaderControls(
                     shape = RoundedCornerShape(8.dp),
                     colors = buttonColors,
                 ) {
-                    Text(if (darkMode) "亮色" else "暗色")
+                    Icon(
+                        imageVector = if (darkMode) Icons.Filled.LightMode else Icons.Filled.DarkMode,
+                        contentDescription = if (darkMode) "亮色模式" else "暗色模式",
+                    )
                 }
                 Button(
                     onClick = onPrevious,
@@ -903,7 +967,7 @@ private fun ReaderControls(
                     shape = RoundedCornerShape(8.dp),
                     colors = buttonColors,
                 ) {
-                    Text("上一章")
+                    Icon(Icons.Filled.SkipPrevious, contentDescription = "上一章")
                 }
                 Button(
                     onClick = onNext,
@@ -912,9 +976,97 @@ private fun ReaderControls(
                     shape = RoundedCornerShape(8.dp),
                     colors = buttonColors,
                 ) {
-                    Text("下一章")
+                    Icon(Icons.Filled.SkipNext, contentDescription = "下一章")
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun ReaderImage(
+    block: ReaderContentBlock.Image,
+    onClick: () -> Unit,
+) {
+    AsyncImage(
+        model = block.url,
+        contentDescription = block.alt.ifBlank { "章节图片" },
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 12.dp)
+            .clip(RoundedCornerShape(6.dp))
+            .clickable(onClick = onClick),
+    )
+}
+
+@Composable
+private fun ImageViewer(
+    imageUrl: String,
+    message: String?,
+    onDismiss: () -> Unit,
+    onSave: () -> Unit,
+) {
+    var scale by remember { mutableFloatStateOf(1f) }
+    var offset by remember { mutableStateOf(Offset.Zero) }
+
+    BackHandler(onBack = onDismiss)
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black)
+            .pointerInput(imageUrl) {
+                detectTransformGestures { _, pan, zoom, _ ->
+                    val nextScale = (scale * zoom).coerceIn(1f, 5f)
+                    scale = nextScale
+                    offset = if (nextScale == 1f) Offset.Zero else offset + pan
+                }
+            },
+    ) {
+        AsyncImage(
+            model = imageUrl,
+            contentDescription = "图片预览",
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer {
+                    scaleX = scale
+                    scaleY = scale
+                    translationX = offset.x
+                    translationY = offset.y
+                },
+        )
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(Color.Black.copy(alpha = 0.58f))
+                .windowInsetsPadding(WindowInsets.statusBars)
+                .padding(horizontal = 12.dp, vertical = 8.dp)
+                .align(Alignment.TopCenter),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            TextButton(onClick = onDismiss) {
+                Text("关闭", color = Color.White)
+            }
+            Spacer(modifier = Modifier.weight(1f))
+            IconButton(onClick = onSave) {
+                Icon(
+                    imageVector = Icons.Filled.Download,
+                    contentDescription = "保存到相册",
+                    tint = Color.White,
+                )
+            }
+        }
+        if (message != null) {
+            Text(
+                text = message,
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .windowInsetsPadding(WindowInsets.navigationBars)
+                    .padding(18.dp)
+                    .background(Color.Black.copy(alpha = 0.62f), RoundedCornerShape(8.dp))
+                    .padding(horizontal = 14.dp, vertical = 8.dp),
+                color = Color.White,
+            )
         }
     }
 }
@@ -984,13 +1136,59 @@ private fun readerColors(darkMode: Boolean): ReaderColors {
     }
 }
 
-private fun screenTransition(): ContentTransform {
+private fun screenTransition(initial: Screen, target: Screen): ContentTransform {
     val duration = 220
-    return (slideInHorizontally(animationSpec = tween(duration)) { it / 3 } + fadeIn(tween(duration)))
-        .togetherWith(slideOutHorizontally(animationSpec = tween(duration)) { -it / 4 } + fadeOut(tween(duration)))
+    val enteringReader = target is Screen.Reader && initial !is Screen.Reader
+    val leavingReader = initial is Screen.Reader && target !is Screen.Reader
+
+    return when {
+        enteringReader -> (slideInHorizontally(animationSpec = tween(duration)) { it } + fadeIn(tween(duration)))
+            .togetherWith(slideOutHorizontally(animationSpec = tween(duration)) { -it / 3 } + fadeOut(tween(duration)))
+
+        leavingReader -> (slideInHorizontally(animationSpec = tween(duration)) { -it / 3 } + fadeIn(tween(duration)))
+            .togetherWith(slideOutHorizontally(animationSpec = tween(duration)) { it } + fadeOut(tween(duration)))
+
+        else -> (fadeIn(tween(duration))).togetherWith(fadeOut(tween(duration)))
+    }
 }
 
 private fun Throwable.userMessage(prefix: String): String {
     val detail = message?.takeIf { it.isNotBlank() } ?: javaClass.simpleName
     return "$prefix：$detail"
+}
+
+private suspend fun saveImageToGallery(context: android.content.Context, imageUrl: String) = withContext(Dispatchers.IO) {
+    val request = ImageRequest.Builder(context)
+        .data(imageUrl)
+        .allowHardware(false)
+        .build()
+    val result = context.imageLoader.execute(request) as? SuccessResult
+        ?: throw IOException("图片加载失败")
+    val bitmap = (result.drawable as? BitmapDrawable)?.bitmap
+        ?: throw IOException("图片格式不支持保存")
+
+    val fileName = "community_esj_${System.currentTimeMillis()}.png"
+    val values = ContentValues().apply {
+        put(MediaStore.Images.Media.DISPLAY_NAME, fileName)
+        put(MediaStore.Images.Media.MIME_TYPE, "image/png")
+        put(MediaStore.Images.Media.RELATIVE_PATH, "${Environment.DIRECTORY_PICTURES}/CommunityESJ")
+        put(MediaStore.Images.Media.IS_PENDING, 1)
+    }
+
+    val resolver = context.contentResolver
+    val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+        ?: throw IOException("无法创建相册文件")
+    runCatching {
+        resolver.openOutputStream(uri)?.use { stream ->
+            if (!bitmap.compress(Bitmap.CompressFormat.PNG, 100, stream)) {
+                throw IOException("图片写入失败")
+            }
+        } ?: throw IOException("无法打开相册文件")
+        values.clear()
+        values.put(MediaStore.Images.Media.IS_PENDING, 0)
+        resolver.update(uri, values, null, null)
+    }.onFailure {
+        resolver.delete(uri, null, null)
+        throw it
+    }
 }
