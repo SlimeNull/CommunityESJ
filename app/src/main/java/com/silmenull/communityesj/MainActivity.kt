@@ -7,6 +7,17 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.ContentTransform
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -38,6 +49,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
@@ -86,6 +98,23 @@ private val ReaderBar = Color(0xF7FFF7E8)
 private val ReaderAccent = Color(0xFF5B4630)
 private val ReaderDisabled = Color(0xFFE0D2BE)
 private val ReaderDisabledText = Color(0xFF776855)
+private val ReaderDarkPage = Color(0xFF181613)
+private val ReaderDarkText = Color(0xFFEDE2D0)
+private val ReaderDarkMutedText = Color(0xFFBFAE96)
+private val ReaderDarkBar = Color(0xF7231F1A)
+private val ReaderDarkAccent = Color(0xFFD6B986)
+private val ReaderDarkDisabled = Color(0xFF40382F)
+private val ReaderDarkDisabledText = Color(0xFF8F7F6D)
+
+private data class ReaderColors(
+    val page: Color,
+    val text: Color,
+    val mutedText: Color,
+    val bar: Color,
+    val accent: Color,
+    val disabled: Color,
+    val disabledText: Color,
+)
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -117,6 +146,7 @@ private class AppState(
     var currentPage by mutableIntStateOf(1)
     var readerInitialProgress by mutableFloatStateOf(0f)
     var readerScrollProgress by mutableFloatStateOf(0f)
+    var readerDarkMode by mutableStateOf(repository.isReaderDarkMode())
 }
 
 @Composable
@@ -160,13 +190,14 @@ private fun EsjReaderApp() {
         initialProgress: Float = 0f,
         forceRefresh: Boolean = false,
     ) {
+        val wasReader = appState.screen is Screen.Reader
         appState.screen = Screen.Reader(url, detailUrlHint)
         appState.readerInitialProgress = initialProgress.coerceIn(0f, 1f)
         appState.readerScrollProgress = appState.readerInitialProgress
         scope.launch {
             appState.isLoading = true
             appState.message = null
-            if (!forceRefresh) {
+            if (!wasReader) {
                 appState.readerChapter = null
             }
             runCatching {
@@ -228,75 +259,86 @@ private fun EsjReaderApp() {
     }
 
     Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-        when (val screen = appState.screen) {
-            Screen.Login -> LoginScreen(
-                isLoading = appState.isLoading,
-                message = appState.message,
-                onLogin = { email, password ->
-                    scope.launch {
-                        appState.isLoading = true
-                        appState.message = null
-                        runCatching {
-                            appState.repository.login(email, password)
-                        }.onSuccess { result ->
-                            appState.message = result.message
-                            if (result.success) {
-                                loadBookshelf()
+        AnimatedContent(
+            targetState = appState.screen,
+            transitionSpec = { screenTransition() },
+            label = "screen_transition",
+        ) { screen ->
+            when (screen) {
+                Screen.Login -> LoginScreen(
+                    isLoading = appState.isLoading,
+                    message = appState.message,
+                    onLogin = { email, password ->
+                        scope.launch {
+                            appState.isLoading = true
+                            appState.message = null
+                            runCatching {
+                                appState.repository.login(email, password)
+                            }.onSuccess { result ->
+                                appState.message = result.message
+                                if (result.success) {
+                                    loadBookshelf()
+                                }
+                            }.onFailure { error ->
+                                appState.message = error.userMessage("登录失败")
                             }
-                        }.onFailure { error ->
-                            appState.message = error.userMessage("登录失败")
+                            appState.isLoading = false
                         }
-                        appState.isLoading = false
-                    }
-                },
-            )
+                    },
+                )
 
-            Screen.Bookshelf -> BookshelfScreen(
-                page = appState.bookshelf,
-                isLoading = appState.isLoading,
-                message = appState.message,
-                onRefresh = { loadBookshelf(appState.currentPage) },
-                onPage = { loadBookshelf(it) },
-                onOpenBook = ::openBook,
-                onOpenWeb = { openWeb("https://www.esjzone.cc/my/favorite") },
-                onLogout = {
-                    appState.repository.logout()
-                    appState.screen = Screen.Login
-                    appState.message = null
-                    appState.readerChapter = null
-                    appState.bookshelf = BookshelfPage(emptyList(), 1, 1)
-                },
-            )
+                Screen.Bookshelf -> BookshelfScreen(
+                    page = appState.bookshelf,
+                    isLoading = appState.isLoading,
+                    message = appState.message,
+                    onRefresh = { loadBookshelf(appState.currentPage) },
+                    onPage = { loadBookshelf(it) },
+                    onOpenBook = ::openBook,
+                    onOpenWeb = { openWeb("https://www.esjzone.cc/my/favorite") },
+                    onLogout = {
+                        appState.repository.logout()
+                        appState.screen = Screen.Login
+                        appState.message = null
+                        appState.readerChapter = null
+                        appState.bookshelf = BookshelfPage(emptyList(), 1, 1)
+                    },
+                )
 
-            is Screen.Reader -> ReaderScreen(
-                chapter = appState.readerChapter,
-                isLoading = appState.isLoading,
-                message = appState.message,
-                initialScrollProgress = appState.readerInitialProgress,
-                onBack = {
-                    appState.screen = Screen.Bookshelf
-                    appState.message = null
-                },
-                onProgress = { progress ->
-                    appState.readerScrollProgress = progress.scrollProgress
-                    appState.repository.saveProgress(progress)
-                },
-                onOpenChapter = { chapter ->
-                    openReader(chapter.url, appState.readerChapter?.detailUrl ?: screen.detailUrlHint)
-                },
-                onOpenUrl = { url ->
-                    openReader(url, appState.readerChapter?.detailUrl ?: screen.detailUrlHint)
-                },
-                onRefresh = {
-                    val chapter = appState.readerChapter ?: return@ReaderScreen
-                    openReader(
-                        url = chapter.url,
-                        detailUrlHint = chapter.detailUrl ?: screen.detailUrlHint,
-                        initialProgress = appState.readerScrollProgress,
-                        forceRefresh = true,
-                    )
-                },
-            )
+                is Screen.Reader -> ReaderScreen(
+                    chapter = appState.readerChapter,
+                    isLoading = appState.isLoading,
+                    message = appState.message,
+                    initialScrollProgress = appState.readerInitialProgress,
+                    darkMode = appState.readerDarkMode,
+                    onBack = {
+                        appState.screen = Screen.Bookshelf
+                        appState.message = null
+                    },
+                    onProgress = { progress ->
+                        appState.readerScrollProgress = progress.scrollProgress
+                        appState.repository.saveProgress(progress)
+                    },
+                    onOpenChapter = { chapter ->
+                        openReader(chapter.url, appState.readerChapter?.detailUrl ?: screen.detailUrlHint)
+                    },
+                    onOpenUrl = { url ->
+                        openReader(url, appState.readerChapter?.detailUrl ?: screen.detailUrlHint)
+                    },
+                    onRefresh = {
+                        val chapter = appState.readerChapter ?: return@ReaderScreen
+                        openReader(
+                            url = chapter.url,
+                            detailUrlHint = chapter.detailUrl ?: screen.detailUrlHint,
+                            initialProgress = appState.readerScrollProgress,
+                            forceRefresh = true,
+                        )
+                    },
+                    onDarkModeChange = { enabled ->
+                        appState.readerDarkMode = enabled
+                        appState.repository.setReaderDarkMode(enabled)
+                    },
+                )
+            }
         }
     }
 }
@@ -565,16 +607,19 @@ private fun ReaderScreen(
     isLoading: Boolean,
     message: String?,
     initialScrollProgress: Float,
+    darkMode: Boolean,
     onBack: () -> Unit,
     onProgress: (ReadingProgress) -> Unit,
     onOpenChapter: (ChapterLink) -> Unit,
     onOpenUrl: (String) -> Unit,
     onRefresh: () -> Unit,
+    onDarkModeChange: (Boolean) -> Unit,
 ) {
     var controlsVisible by remember { mutableStateOf(false) }
     var chapterSheetVisible by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
     val interactionSource = remember { MutableInteractionSource() }
+    val colors = readerColors(darkMode)
 
     BackHandler(onBack = onBack)
 
@@ -615,7 +660,7 @@ private fun ReaderScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(ReaderPage)
+            .background(colors.page)
             .clickable(
                 interactionSource = interactionSource,
                 indication = null,
@@ -637,14 +682,14 @@ private fun ReaderScreen(
                     Text(
                         text = chapter.chapterTitle,
                         style = MaterialTheme.typography.headlineSmall,
-                        color = ReaderText,
+                        color = colors.text,
                         fontWeight = FontWeight.Bold,
                     )
                     if (chapter.bookTitle.isNotBlank()) {
                         Text(
                             text = chapter.bookTitle,
                             modifier = Modifier.padding(top = 8.dp, bottom = 24.dp),
-                            color = ReaderMutedText,
+                            color = colors.mutedText,
                         )
                     } else {
                         Spacer(Modifier.height(24.dp))
@@ -654,7 +699,7 @@ private fun ReaderScreen(
                     Text(
                         text = paragraph,
                         modifier = Modifier.padding(bottom = 14.dp),
-                        color = ReaderText,
+                        color = colors.text,
                         fontSize = 19.sp,
                         lineHeight = 32.sp,
                     )
@@ -665,24 +710,39 @@ private fun ReaderScreen(
             }
         }
 
-        if (controlsVisible && chapter != null) {
-            ReaderControls(
-                chapterTitle = chapter.chapterTitle,
-                hasPrevious = chapter.previousUrl != null,
-                hasNext = chapter.nextUrl != null,
-                onBack = onBack,
-                onMenu = {
-                    controlsVisible = false
-                    chapterSheetVisible = true
-                },
-                onRefresh = onRefresh,
-                onPrevious = { chapter.previousUrl?.let(onOpenUrl) },
-                onNext = { chapter.nextUrl?.let(onOpenUrl) },
-            )
+        if (chapter != null) {
+            AnimatedVisibility(
+                visible = controlsVisible,
+                enter = fadeIn(tween(120)),
+                exit = fadeOut(tween(120)),
+            ) {
+                ReaderControls(
+                    chapterTitle = chapter.chapterTitle,
+                    colors = colors,
+                    darkMode = darkMode,
+                    hasPrevious = chapter.previousUrl != null,
+                    hasNext = chapter.nextUrl != null,
+                    onBack = onBack,
+                    onMenu = {
+                        controlsVisible = false
+                        chapterSheetVisible = true
+                    },
+                    onRefresh = onRefresh,
+                    onDarkModeChange = onDarkModeChange,
+                    onPrevious = { chapter.previousUrl?.let(onOpenUrl) },
+                    onNext = { chapter.nextUrl?.let(onOpenUrl) },
+                )
+            }
         }
 
         if (isLoading && chapter != null) {
-            CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
+            LinearProgressIndicator(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .align(Alignment.TopCenter),
+                color = colors.accent,
+                trackColor = colors.bar,
+            )
         }
     }
 
@@ -729,98 +789,121 @@ private fun ReaderScreen(
 @Composable
 private fun ReaderControls(
     chapterTitle: String,
+    colors: ReaderColors,
+    darkMode: Boolean,
     hasPrevious: Boolean,
     hasNext: Boolean,
     onBack: () -> Unit,
     onMenu: () -> Unit,
     onRefresh: () -> Unit,
+    onDarkModeChange: (Boolean) -> Unit,
     onPrevious: () -> Unit,
     onNext: () -> Unit,
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
     val buttonColors = ButtonDefaults.buttonColors(
-        containerColor = ReaderAccent,
+        containerColor = colors.accent,
         contentColor = Color.White,
-        disabledContainerColor = ReaderDisabled,
-        disabledContentColor = ReaderDisabledText,
+        disabledContainerColor = colors.disabled,
+        disabledContentColor = colors.disabledText,
     )
 
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color.Black.copy(alpha = 0.16f)),
+            .background(Color.Black.copy(alpha = if (darkMode) 0.28f else 0.16f)),
     ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(ReaderBar)
-                .windowInsetsPadding(WindowInsets.statusBars)
-                .padding(horizontal = 12.dp, vertical = 10.dp)
-                .align(Alignment.TopCenter),
-            verticalAlignment = Alignment.CenterVertically,
+        AnimatedVisibility(
+            visible = true,
+            enter = slideInVertically(animationSpec = tween(180)) { -it } + fadeIn(tween(180)),
+            exit = slideOutVertically(animationSpec = tween(160)) { -it } + fadeOut(tween(120)),
+            modifier = Modifier.align(Alignment.TopCenter),
         ) {
-            TextButton(onClick = onBack) {
-                Text("书架", color = ReaderAccent)
-            }
-            Text(
-                text = chapterTitle,
-                modifier = Modifier.weight(1f),
-                color = ReaderText,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Box {
-                TextButton(onClick = { menuExpanded = true }) {
-                    Text("菜单", color = ReaderAccent)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(colors.bar)
+                    .windowInsetsPadding(WindowInsets.statusBars)
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                TextButton(onClick = onBack) {
+                    Text("书架", color = colors.accent)
                 }
-                DropdownMenu(
-                    expanded = menuExpanded,
-                    onDismissRequest = { menuExpanded = false },
-                ) {
-                    DropdownMenuItem(
-                        text = { Text("刷新") },
-                        onClick = {
-                            menuExpanded = false
-                            onRefresh()
-                        },
-                    )
+                Text(
+                    text = chapterTitle,
+                    modifier = Modifier.weight(1f),
+                    color = colors.text,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Box {
+                    TextButton(onClick = { menuExpanded = true }) {
+                        Text("菜单", color = colors.accent)
+                    }
+                    DropdownMenu(
+                        expanded = menuExpanded,
+                        onDismissRequest = { menuExpanded = false },
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("刷新") },
+                            onClick = {
+                                menuExpanded = false
+                                onRefresh()
+                            },
+                        )
+                        DropdownMenuItem(
+                            text = { Text(if (darkMode) "关闭暗色模式" else "暗色模式") },
+                            onClick = {
+                                menuExpanded = false
+                                onDarkModeChange(!darkMode)
+                            },
+                        )
+                    }
                 }
             }
         }
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(ReaderBar)
-                .windowInsetsPadding(WindowInsets.navigationBars)
-                .padding(horizontal = 18.dp, vertical = 14.dp)
-                .align(Alignment.BottomCenter),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
+
+        AnimatedVisibility(
+            visible = true,
+            enter = slideInVertically(animationSpec = tween(180)) { it } + fadeIn(tween(180)),
+            exit = slideOutVertically(animationSpec = tween(160)) { it } + fadeOut(tween(120)),
+            modifier = Modifier.align(Alignment.BottomCenter),
         ) {
-            Button(
-                onClick = onMenu,
-                modifier = Modifier.weight(1f),
-                shape = RoundedCornerShape(8.dp),
-                colors = buttonColors,
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(colors.bar)
+                    .windowInsetsPadding(WindowInsets.navigationBars)
+                    .padding(horizontal = 18.dp, vertical = 14.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                Text("目录")
-            }
-            Button(
-                onClick = onPrevious,
-                modifier = Modifier.weight(1f),
-                enabled = hasPrevious,
-                shape = RoundedCornerShape(8.dp),
-                colors = buttonColors,
-            ) {
-                Text("上一章")
-            }
-            Button(
-                onClick = onNext,
-                modifier = Modifier.weight(1f),
-                enabled = hasNext,
-                shape = RoundedCornerShape(8.dp),
-                colors = buttonColors,
-            ) {
-                Text("下一章")
+                Button(
+                    onClick = onMenu,
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(8.dp),
+                    colors = buttonColors,
+                ) {
+                    Text("目录")
+                }
+                Button(
+                    onClick = onPrevious,
+                    modifier = Modifier.weight(1f),
+                    enabled = hasPrevious,
+                    shape = RoundedCornerShape(8.dp),
+                    colors = buttonColors,
+                ) {
+                    Text("上一章")
+                }
+                Button(
+                    onClick = onNext,
+                    modifier = Modifier.weight(1f),
+                    enabled = hasNext,
+                    shape = RoundedCornerShape(8.dp),
+                    colors = buttonColors,
+                ) {
+                    Text("下一章")
+                }
             }
         }
     }
@@ -865,6 +948,36 @@ private fun LazyListState.readingProgress(): Float {
     val viewport = (info.viewportEndOffset - info.viewportStartOffset).coerceAtLeast(1)
     val itemProgress = firstVisibleItemScrollOffset.toFloat() / viewport.toFloat()
     return ((firstVisibleItemIndex + itemProgress) / (total - 1).toFloat()).coerceIn(0f, 1f)
+}
+
+private fun readerColors(darkMode: Boolean): ReaderColors {
+    return if (darkMode) {
+        ReaderColors(
+            page = ReaderDarkPage,
+            text = ReaderDarkText,
+            mutedText = ReaderDarkMutedText,
+            bar = ReaderDarkBar,
+            accent = ReaderDarkAccent,
+            disabled = ReaderDarkDisabled,
+            disabledText = ReaderDarkDisabledText,
+        )
+    } else {
+        ReaderColors(
+            page = ReaderPage,
+            text = ReaderText,
+            mutedText = ReaderMutedText,
+            bar = ReaderBar,
+            accent = ReaderAccent,
+            disabled = ReaderDisabled,
+            disabledText = ReaderDisabledText,
+        )
+    }
+}
+
+private fun screenTransition(): ContentTransform {
+    val duration = 220
+    return (slideInHorizontally(animationSpec = tween(duration)) { it / 3 } + fadeIn(tween(duration)))
+        .togetherWith(slideOutHorizontally(animationSpec = tween(duration)) { -it / 4 } + fadeOut(tween(duration)))
 }
 
 private fun Throwable.userMessage(prefix: String): String {

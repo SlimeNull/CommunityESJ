@@ -29,6 +29,12 @@ class EsjRepository(context: Context) {
         store.saveProgress(progress)
     }
 
+    fun isReaderDarkMode(): Boolean = store.isReaderDarkMode()
+
+    fun setReaderDarkMode(enabled: Boolean) {
+        store.setReaderDarkMode(enabled)
+    }
+
     fun logout() {
         cookieJar.clear()
         store.clearSession()

@@ -49,15 +49,10 @@ object EsjParser {
             ?.takeIf { it.isNotBlank() }
 
         val contentElement = doc.selectFirst(".forum-content")
-        val paragraphs = contentElement
-            ?.select("p, div, br")
-            ?.mapNotNull { element ->
-                when (element.tagName()) {
-                    "br" -> ""
-                    else -> element.wholeText().cleanText().takeIf { it.isNotBlank() }
-                }
-            }
-            ?.ifEmpty { null }
+        val paragraphElements = contentElement?.select("p")
+        val paragraphs = paragraphElements
+            ?.takeIf { it.isNotEmpty() }
+            ?.mapNotNull { it.wholeText().cleanText().takeIf(String::isNotBlank) }
             ?: contentElement?.wholeText()?.split('\n')?.mapNotNull { it.cleanText().takeIf(String::isNotBlank) }
             ?: emptyList()
 

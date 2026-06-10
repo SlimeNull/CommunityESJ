@@ -30,11 +30,21 @@ class LocalStore(context: Context) {
     }
 
     fun saveChapter(chapter: ReaderChapter) {
-        writeJson("chapter", chapter.url, chapter.toJson())
+        writeJson("chapter-v2", chapter.url, chapter.toJson())
     }
 
     fun getChapter(url: String): ReaderChapter? {
-        return readJson("chapter", url)?.toReaderChapter()
+        return readJson("chapter-v2", url)?.toReaderChapter()
+    }
+
+    fun isReaderDarkMode(): Boolean {
+        return preferences.getBoolean("reader_dark_mode", false)
+    }
+
+    fun setReaderDarkMode(enabled: Boolean) {
+        preferences.edit()
+            .putBoolean("reader_dark_mode", enabled)
+            .apply()
     }
 
     fun saveChapters(detailUrl: String, chapters: List<ChapterLink>) {
