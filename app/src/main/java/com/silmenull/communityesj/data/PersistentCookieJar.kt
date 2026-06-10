@@ -7,8 +7,13 @@ import okhttp3.HttpUrl
 
 class PersistentCookieJar(
     private val preferences: SharedPreferences,
+    baseHost: String,
 ) : CookieJar {
     private val cookies = mutableListOf<Cookie>()
+    private val baseUrl: HttpUrl = HttpUrl.Builder()
+        .scheme("https")
+        .host(baseHost)
+        .build()
 
     init {
         restore()
@@ -54,7 +59,7 @@ class PersistentCookieJar(
 
     private fun restore() {
         preferences.getStringSet(KEY_COOKIES, emptySet()).orEmpty()
-            .mapNotNull { Cookie.parse(BASE_URL, it) }
+            .mapNotNull { Cookie.parse(baseUrl, it) }
             .let { restored ->
                 cookies.clear()
                 cookies.addAll(restored)
@@ -69,9 +74,5 @@ class PersistentCookieJar(
 
     private companion object {
         const val KEY_COOKIES = "cookies"
-        val BASE_URL: HttpUrl = HttpUrl.Builder()
-            .scheme("https")
-            .host("www.esjzone.cc")
-            .build()
     }
 }

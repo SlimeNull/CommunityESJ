@@ -40,6 +40,16 @@ class LocalStore(context: Context) {
         return preferences.getBoolean("has_logged_in", false)
     }
 
+    fun getHost(): EsjHost {
+        return EsjHost.fromHost(preferences.getString("selected_host", null))
+    }
+
+    fun setHost(host: EsjHost) {
+        preferences.edit()
+            .putString("selected_host", host.host)
+            .apply()
+    }
+
     fun saveChapter(chapter: ReaderChapter) {
         writeJson(CHAPTER_CACHE_PREFIX, chapter.url, chapter.toJson())
     }

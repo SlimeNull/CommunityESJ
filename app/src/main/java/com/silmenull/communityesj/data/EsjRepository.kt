@@ -14,7 +14,8 @@ class LoginExpiredException : IOException("登录凭证已失效,请重新登录
 
 class EsjRepository(context: Context) {
     private val store = LocalStore(context.applicationContext)
-    private val cookieJar = PersistentCookieJar(store.preferences)
+    private var selectedHost = store.getHost()
+    private val cookieJar = PersistentCookieJar(store.preferences, selectedHost.host)
     private val client = OkHttpClient.Builder()
         .cookieJar(cookieJar)
         .followRedirects(true)
@@ -22,6 +23,19 @@ class EsjRepository(context: Context) {
         .connectTimeout(20, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)
         .build()
+
+    fun currentHost(): EsjHost = selectedHost
+
+    fun favoriteUrl(): String = siteUrl("/my/favorite")
+
+    fun switchHost(host: EsjHost): Boolean {
+        if (host == selectedHost) return false
+        cookieJar.clear()
+        store.clearSession()
+        store.setHost(host)
+        selectedHost = host
+        return true
+    }
 
     fun loginSessionState(): LoginSessionState {
         val hasRequiredCookies = cookieJar.hasCookie("ews_key") && cookieJar.hasCookie("ews_token")
@@ -55,7 +69,7 @@ class EsjRepository(context: Context) {
         val tokenBody = FormBody.Builder()
             .add("plxf", "getAuthToken")
             .build()
-        val tokenRequest = baseRequest("https://www.esjzone.cc/my/login")
+        val tokenRequest = baseRequest(siteUrl("/my/login"))
             .post(tokenBody)
             .build()
         val tokenResponse = executeText(tokenRequest)
@@ -67,7 +81,7 @@ class EsjRepository(context: Context) {
             .add("pwd", password)
             .add("remember_me", "on")
             .build()
-        val loginRequest = baseRequest("https://www.esjzone.cc/inc/mem_login.php")
+        val loginRequest = baseRequest(siteUrl("/inc/mem_login.php"))
             .post(loginBody)
             .build()
         val loginResponse = executeText(loginRequest)
@@ -85,15 +99,15 @@ class EsjRepository(context: Context) {
 
     suspend fun loadBookshelf(page: Int = 1): BookshelfPage = withContext(Dispatchers.IO) {
         val url = if (page <= 1) {
-            "https://www.esjzone.cc/my/favorite"
+            favoriteUrl()
         } else {
-            "https://www.esjzone.cc/my/favorite/$page.html"
+            siteUrl("/my/favorite/$page.html")
         }
         val html = executeText(baseRequest(url).get().build())
         if (EsjParser.containsLoginRedirect(html)) {
             throw LoginExpiredException()
         }
-        EsjParser.parseBookshelf(html, page)
+        EsjParser.parseBookshelf(html, page, selectedHost.baseUrl)
     }
 
     suspend fun resolveBookStart(book: BookItem): ChapterLink? = withContext(Dispatchers.IO) {
@@ -142,7 +156,7 @@ class EsjRepository(context: Context) {
             store.getChapters(detailUrl)?.let { return@withContext markCached(it) }
         }
         val html = executeText(baseRequest(detailUrl).get().build())
-        val chapters = EsjParser.parseChapters(html)
+        val chapters = EsjParser.parseChapters(html, detailUrl)
         if (chapters.isNotEmpty()) {
             store.saveChapters(detailUrl, chapters)
         }
@@ -172,7 +186,7 @@ class EsjRepository(context: Context) {
     private fun chaptersDetailHint(chapters: List<ChapterLink>): String? {
         val firstUrl = chapters.firstOrNull()?.url ?: return null
         val match = Regex("""/forum/(\d+)/""").find(firstUrl) ?: return null
-        return "https://www.esjzone.cc/detail/${match.groupValues[1]}.html"
+        return siteUrl("/detail/${match.groupValues[1]}.html")
     }
 
     private fun markCached(chapters: List<ChapterLink>): List<ChapterLink> {
@@ -182,10 +196,14 @@ class EsjRepository(context: Context) {
     private fun baseRequest(url: String): Request.Builder {
         return Request.Builder()
             .url(url)
-            .header("User-Agent", "CommunityESJ Android Reader")
+            .header("User-Agent", "ESJ Read Android Reader")
             .header("Accept", "text/html,application/xhtml+xml,application/xml,application/json;q=0.9,*/*;q=0.8")
             .header("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
-            .header("Referer", "https://www.esjzone.cc/")
+            .header("Referer", "${selectedHost.baseUrl}/")
+    }
+
+    private fun siteUrl(path: String): String {
+        return "${selectedHost.baseUrl}$path"
     }
 
     private fun executeText(request: Request): String {
