@@ -22,6 +22,7 @@ data class ChapterLink(
 )
 
 data class ReaderChapter(
+    val url: String,
     val bookTitle: String,
     val chapterTitle: String,
     val paragraphs: List<String>,
@@ -34,4 +35,12 @@ data class ReaderChapter(
 data class LoginResult(
     val success: Boolean,
     val message: String,
+)
+
+data class ReadingProgress(
+    val detailUrl: String,
+    val bookTitle: String,
+    val chapterTitle: String,
+    val chapterUrl: String,
+    val scrollProgress: Float,
 )

@@ -1,5 +1,6 @@
 package com.silmenull.communityesj.data
 
+import android.content.Context
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.FormBody
@@ -9,8 +10,9 @@ import org.json.JSONObject
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 
-class EsjRepository {
-    private val cookieJar = InMemoryCookieJar()
+class EsjRepository(context: Context) {
+    private val store = LocalStore(context.applicationContext)
+    private val cookieJar = PersistentCookieJar(store.preferences)
     private val client = OkHttpClient.Builder()
         .cookieJar(cookieJar)
         .followRedirects(true)
@@ -18,6 +20,19 @@ class EsjRepository {
         .connectTimeout(20, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)
         .build()
+
+    fun hasLoginSession(): Boolean = cookieJar.hasCookies()
+
+    fun progressFor(detailUrl: String): ReadingProgress? = store.getProgress(detailUrl)
+
+    fun saveProgress(progress: ReadingProgress) {
+        store.saveProgress(progress)
+    }
+
+    fun logout() {
+        cookieJar.clear()
+        store.clearSession()
+    }
 
     suspend fun login(email: String, password: String): LoginResult = withContext(Dispatchers.IO) {
         cookieJar.clear()
@@ -61,21 +76,81 @@ class EsjRepository {
         EsjParser.parseBookshelf(html, page)
     }
 
-    suspend fun loadReader(url: String, detailUrlHint: String? = null): ReaderChapter = withContext(Dispatchers.IO) {
+    suspend fun resolveBookStart(book: BookItem): ChapterLink? = withContext(Dispatchers.IO) {
+        val detailUrl = book.detailUrl ?: return@withContext null
+        val chapters = loadChapters(detailUrl, forceRefresh = false)
+        val saved = store.getProgress(detailUrl)
+        val savedChapter = saved?.let { progress ->
+            val remoteProgressTitle = book.lastReadChapter.ifBlank { null }
+            if (remoteProgressTitle == null || remoteProgressTitle == progress.chapterTitle) {
+                chapters.firstOrNull { it.url == progress.chapterUrl && it.title == progress.chapterTitle }
+            } else {
+                null
+            }
+        }
+        savedChapter ?: chapters.firstOrNull()
+    }
+
+    suspend fun loadReader(
+        url: String,
+        detailUrlHint: String? = null,
+        forceRefresh: Boolean = false,
+    ): ReaderChapter = withContext(Dispatchers.IO) {
+        if (!forceRefresh) {
+            val cached = store.getChapter(url)
+            if (cached != null) {
+                val chapters = (cached.detailUrl ?: detailUrlHint)
+                    ?.let { loadChapters(it, forceRefresh = false) }
+                    .orEmpty()
+                return@withContext cached.copy(chapters = chapters.ifEmpty { cached.chapters })
+            }
+        }
+
         val readerHtml = executeText(baseRequest(url).get().build())
         val parsedReader = EsjParser.parseReader(readerHtml, url)
         val detailUrl = detailUrlHint ?: parsedReader.detailUrl
-        val chapters = detailUrl?.let { detail ->
-            val detailHtml = executeText(baseRequest(detail).get().build())
-            EsjParser.parseChapters(detailHtml)
-        }.orEmpty()
-
-        parsedReader.copy(chapters = chapters)
+        val chapters = detailUrl?.let { loadChapters(it, forceRefresh = forceRefresh) }.orEmpty()
+        val chapter = parsedReader.copy(chapters = chapters)
+        store.saveChapter(chapter)
+        chapter
     }
 
-    suspend fun loadFirstChapterFromDetail(detailUrl: String): String? = withContext(Dispatchers.IO) {
+    suspend fun loadChapters(detailUrl: String, forceRefresh: Boolean = false): List<ChapterLink> = withContext(Dispatchers.IO) {
+        if (!forceRefresh) {
+            store.getChapters(detailUrl)?.let { return@withContext it }
+        }
         val html = executeText(baseRequest(detailUrl).get().build())
-        EsjParser.parseChapters(html).firstOrNull()?.url
+        val chapters = EsjParser.parseChapters(html)
+        if (chapters.isNotEmpty()) {
+            store.saveChapters(detailUrl, chapters)
+        }
+        chapters
+    }
+
+    suspend fun prefetchNextChapters(currentUrl: String, chapters: List<ChapterLink>, count: Int = 3) = withContext(Dispatchers.IO) {
+        val currentIndex = chapters.indexOfFirst { it.url == currentUrl }
+        if (currentIndex < 0) return@withContext
+
+        chapters.drop(currentIndex + 1)
+            .take(count)
+            .forEach { chapter ->
+                if (store.getChapter(chapter.url) == null) {
+                    runCatching {
+                        val parsed = loadReader(
+                            url = chapter.url,
+                            detailUrlHint = chaptersDetailHint(chapters),
+                            forceRefresh = false,
+                        )
+                        store.saveChapter(parsed)
+                    }
+                }
+            }
+    }
+
+    private fun chaptersDetailHint(chapters: List<ChapterLink>): String? {
+        val firstUrl = chapters.firstOrNull()?.url ?: return null
+        val match = Regex("""/forum/(\d+)/""").find(firstUrl) ?: return null
+        return "https://www.esjzone.cc/detail/${match.groupValues[1]}.html"
     }
 
     private fun baseRequest(url: String): Request.Builder {
