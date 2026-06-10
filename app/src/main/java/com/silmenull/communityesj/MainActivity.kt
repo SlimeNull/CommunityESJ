@@ -8,6 +8,7 @@ import android.net.Uri
 import android.os.Bundle
 import android.content.ContentValues
 import android.os.Environment
+import android.view.autofill.AutofillManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
@@ -45,8 +46,11 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.Download
@@ -83,18 +87,29 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.autofill.AutofillNode
+import androidx.compose.ui.autofill.AutofillType
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalAutofill
+import androidx.compose.ui.platform.LocalAutofillTree
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -187,6 +202,9 @@ private fun EsjReaderApp() {
     val context = LocalContext.current
     val appState = remember(context) { AppState(EsjRepository(context)) }
     val scope = rememberCoroutineScope()
+    val autofillManager = remember(context) {
+        context.getSystemService(AutofillManager::class.java)
+    }
 
     fun openWeb(url: String) {
         runCatching {
@@ -327,6 +345,7 @@ private fun EsjReaderApp() {
                             }.onSuccess { result ->
                                 appState.message = result.message
                                 if (result.success) {
+                                    autofillManager?.commit()
                                     loadBookshelf()
                                 }
                             }.onFailure { error ->
@@ -404,7 +423,8 @@ private fun EsjReaderApp() {
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@Suppress("DEPRECATION")
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalComposeUiApi::class)
 @Composable
 private fun LoginScreen(
     isLoading: Boolean,
@@ -415,6 +435,7 @@ private fun LoginScreen(
 ) {
     var email by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
+    val canSubmit = !isLoading && email.isNotBlank() && password.isNotBlank()
 
     Scaffold(
         modifier = Modifier.fillMaxSize(),
@@ -458,24 +479,51 @@ private fun LoginScreen(
             OutlinedTextField(
                 value = email,
                 onValueChange = { email = it },
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .autofill(
+                        autofillTypes = listOf(AutofillType.EmailAddress, AutofillType.Username),
+                        onFill = { email = it },
+                    ),
+                enabled = !isLoading,
                 singleLine = true,
                 label = { Text("邮箱") },
+                keyboardOptions = KeyboardOptions(
+                    keyboardType = KeyboardType.Email,
+                    imeAction = ImeAction.Next,
+                ),
             )
             Spacer(Modifier.height(12.dp))
             OutlinedTextField(
                 value = password,
                 onValueChange = { password = it },
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .autofill(
+                        autofillTypes = listOf(AutofillType.Password),
+                        onFill = { password = it },
+                    ),
+                enabled = !isLoading,
                 singleLine = true,
                 label = { Text("密码") },
                 visualTransformation = PasswordVisualTransformation(),
+                keyboardOptions = KeyboardOptions(
+                    keyboardType = KeyboardType.Password,
+                    imeAction = ImeAction.Done,
+                ),
+                keyboardActions = KeyboardActions(
+                    onDone = {
+                        if (canSubmit) {
+                            onLogin(email.trim(), password)
+                        }
+                    },
+                ),
             )
             Spacer(Modifier.height(20.dp))
             Button(
                 onClick = { onLogin(email.trim(), password) },
                 modifier = Modifier.fillMaxWidth(),
-                enabled = !isLoading && email.isNotBlank() && password.isNotBlank(),
+                enabled = canSubmit,
             ) {
                 if (isLoading) {
                     CircularProgressIndicator(
@@ -496,6 +544,42 @@ private fun LoginScreen(
             }
         }
     }
+}
+
+@Suppress("DEPRECATION")
+@OptIn(ExperimentalComposeUiApi::class)
+@Composable
+private fun Modifier.autofill(
+    autofillTypes: List<AutofillType>,
+    onFill: (String) -> Unit,
+): Modifier {
+    val autofill = LocalAutofill.current
+    val autofillTree = LocalAutofillTree.current
+    val autofillNode = remember(autofillTypes) {
+        AutofillNode(
+            autofillTypes = autofillTypes,
+            onFill = onFill,
+        )
+    }
+
+    DisposableEffect(autofillNode) {
+        autofillTree += autofillNode
+        onDispose {
+            autofillTree.children.remove(autofillNode.id)
+        }
+    }
+
+    return this
+        .onGloballyPositioned { coordinates ->
+            autofillNode.boundingBox = coordinates.boundsInWindow()
+        }
+        .onFocusChanged { focusState ->
+            if (focusState.isFocused) {
+                autofill?.requestAutofillForNode(autofillNode)
+            } else {
+                autofill?.cancelAutofillForNode(autofillNode)
+            }
+        }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -787,6 +871,7 @@ private fun ReaderScreen(
     var imageViewerUrl by remember { mutableStateOf<String?>(null) }
     var imageSaveMessage by remember { mutableStateOf<String?>(null) }
     val listState = rememberLazyListState()
+    val chapterListState = rememberLazyListState()
     val interactionSource = remember { MutableInteractionSource() }
     val colors = readerColors(darkMode)
     val context = LocalContext.current
@@ -825,6 +910,15 @@ private fun ReaderScreen(
                     ),
                 )
             }
+        }
+    }
+
+    LaunchedEffect(chapterSheetVisible, chapter?.url, chapter?.chapters) {
+        val current = chapter ?: return@LaunchedEffect
+        if (!chapterSheetVisible) return@LaunchedEffect
+        val index = current.chapters.indexOfFirst { it.url == current.url }
+        if (index >= 0) {
+            chapterListState.scrollToItem((index - 2).coerceAtLeast(0))
         }
     }
 
@@ -950,34 +1044,20 @@ private fun ReaderScreen(
                 if (chapter.chapters.isEmpty()) {
                     EmptyState("没有解析到目录", modifier = Modifier.fillMaxWidth().padding(top = 48.dp))
                 } else {
-                    LazyColumn {
-                        items(chapter.chapters) { item ->
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable {
-                                        chapterSheetVisible = false
+                    LazyColumn(
+                        state = chapterListState,
+                    ) {
+                        itemsIndexed(chapter.chapters) { _, item ->
+                            ChapterListRow(
+                                item = item,
+                                selected = item.url == chapter.url,
+                                onClick = {
+                                    chapterSheetVisible = false
+                                    if (item.url != chapter.url) {
                                         onOpenChapter(item)
                                     }
-                                    .padding(vertical = 14.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Text(
-                                    text = item.title,
-                                    modifier = Modifier.weight(1f),
-                                    maxLines = 2,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                                if (item.isCached) {
-                                    Text(
-                                        text = "已缓存",
-                                        modifier = Modifier.padding(start = 12.dp),
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        fontSize = 12.sp,
-                                    )
-                                }
-                            }
-                            HorizontalDivider()
+                                },
+                            )
                         }
                     }
                 }
@@ -1006,6 +1086,68 @@ private fun ReaderScreen(
                 }
             },
         )
+    }
+}
+
+@Composable
+private fun ChapterListRow(
+    item: ChapterLink,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    val background = if (selected) {
+        MaterialTheme.colorScheme.primaryContainer
+    } else {
+        Color.Transparent
+    }
+    val textColor = if (selected) {
+        MaterialTheme.colorScheme.onPrimaryContainer
+    } else {
+        MaterialTheme.colorScheme.onSurface
+    }
+    val mutedColor = if (selected) {
+        MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.72f)
+    } else {
+        MaterialTheme.colorScheme.onSurfaceVariant
+    }
+
+    Column {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(8.dp))
+                .background(background)
+                .clickable(onClick = onClick)
+                .padding(horizontal = 12.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = item.title,
+                modifier = Modifier.weight(1f),
+                color = textColor,
+                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (selected) {
+                Text(
+                    text = "当前",
+                    modifier = Modifier.padding(start = 12.dp),
+                    color = mutedColor,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
+            if (item.isCached) {
+                Text(
+                    text = "已缓存",
+                    modifier = Modifier.padding(start = 12.dp),
+                    color = mutedColor,
+                    fontSize = 12.sp,
+                )
+            }
+        }
+        HorizontalDivider()
     }
 }
 
