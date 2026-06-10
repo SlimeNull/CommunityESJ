@@ -26,7 +26,18 @@ class LocalStore(context: Context) {
     fun clearSession() {
         preferences.edit()
             .remove("cookies")
+            .remove("has_logged_in")
             .apply()
+    }
+
+    fun markLoggedIn() {
+        preferences.edit()
+            .putBoolean("has_logged_in", true)
+            .apply()
+    }
+
+    fun hasLoggedInBefore(): Boolean {
+        return preferences.getBoolean("has_logged_in", false)
     }
 
     fun saveChapter(chapter: ReaderChapter) {
@@ -35,6 +46,10 @@ class LocalStore(context: Context) {
 
     fun getChapter(url: String): ReaderChapter? {
         return readJson("chapter-v2", url)?.toReaderChapter()
+    }
+
+    fun hasChapter(url: String): Boolean {
+        return jsonFile("chapter-v2", url).exists()
     }
 
     fun isReaderDarkMode(): Boolean {
@@ -73,13 +88,17 @@ class LocalStore(context: Context) {
     }
 
     private fun writeJson(prefix: String, key: String, json: JSONObject) {
-        File(cacheDir, "$prefix-${key.safeFileName()}.json").writeText(json.toString(), StandardCharsets.UTF_8)
+        jsonFile(prefix, key).writeText(json.toString(), StandardCharsets.UTF_8)
     }
 
     private fun readJson(prefix: String, key: String): JSONObject? {
-        val file = File(cacheDir, "$prefix-${key.safeFileName()}.json")
+        val file = jsonFile(prefix, key)
         if (!file.exists()) return null
         return runCatching { JSONObject(file.readText(StandardCharsets.UTF_8)) }.getOrNull()
+    }
+
+    private fun jsonFile(prefix: String, key: String): File {
+        return File(cacheDir, "$prefix-${key.safeFileName()}.json")
     }
 
     private fun String.safeFileName(): String {

@@ -83,6 +83,7 @@ import com.silmenull.communityesj.data.BookItem
 import com.silmenull.communityesj.data.BookshelfPage
 import com.silmenull.communityesj.data.ChapterLink
 import com.silmenull.communityesj.data.EsjRepository
+import com.silmenull.communityesj.data.LoginSessionState
 import com.silmenull.communityesj.data.ReaderChapter
 import com.silmenull.communityesj.data.ReadingProgress
 import com.silmenull.communityesj.ui.theme.CommunityESJTheme
@@ -232,17 +233,10 @@ private fun EsjReaderApp() {
                     appState.isLoading = false
                     return@onSuccess
                 }
-                val progress = appState.repository.progressFor(detailUrl)
-                val restoredProgress = if (
-                    progress != null &&
-                    progress.chapterUrl == chapter.url &&
-                    progress.chapterTitle == chapter.title &&
-                    (book.lastReadChapter.isBlank() || book.lastReadChapter == progress.chapterTitle)
-                ) {
-                    progress.scrollProgress
-                } else {
-                    0f
-                }
+                val restoredProgress = appState.repository.progressFor(detailUrl)
+                    ?.takeIf { it.chapterUrl == chapter.url }
+                    ?.scrollProgress
+                    ?: 0f
                 appState.isLoading = false
                 openReader(chapter.url, detailUrl, restoredProgress)
             }.onFailure { error ->
@@ -253,8 +247,10 @@ private fun EsjReaderApp() {
     }
 
     LaunchedEffect(Unit) {
-        if (appState.repository.hasLoginSession()) {
-            loadBookshelf(goLoginOnFailure = true)
+        when (appState.repository.loginSessionState()) {
+            LoginSessionState.VALID -> loadBookshelf(goLoginOnFailure = true)
+            LoginSessionState.EXPIRED -> appState.message = "登录凭证已过期,请重新登录"
+            LoginSessionState.MISSING -> Unit
         }
     }
 
@@ -765,8 +761,7 @@ private fun ReaderScreen(
                 } else {
                     LazyColumn {
                         items(chapter.chapters) { item ->
-                            Text(
-                                text = item.title,
+                            Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .clickable {
@@ -774,9 +769,23 @@ private fun ReaderScreen(
                                         onOpenChapter(item)
                                     }
                                     .padding(vertical = 14.dp),
-                                maxLines = 2,
-                                overflow = TextOverflow.Ellipsis,
-                            )
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(
+                                    text = item.title,
+                                    modifier = Modifier.weight(1f),
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                if (item.isCached) {
+                                    Text(
+                                        text = "已缓存",
+                                        modifier = Modifier.padding(start = 12.dp),
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        fontSize = 12.sp,
+                                    )
+                                }
+                            }
                             HorizontalDivider()
                         }
                     }
@@ -852,13 +861,6 @@ private fun ReaderControls(
                                 onRefresh()
                             },
                         )
-                        DropdownMenuItem(
-                            text = { Text(if (darkMode) "关闭暗色模式" else "暗色模式") },
-                            onClick = {
-                                menuExpanded = false
-                                onDarkModeChange(!darkMode)
-                            },
-                        )
                     }
                 }
             }
@@ -875,8 +877,8 @@ private fun ReaderControls(
                     .fillMaxWidth()
                     .background(colors.bar)
                     .windowInsetsPadding(WindowInsets.navigationBars)
-                    .padding(horizontal = 18.dp, vertical = 14.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    .padding(horizontal = 12.dp, vertical = 14.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Button(
                     onClick = onMenu,
@@ -885,6 +887,14 @@ private fun ReaderControls(
                     colors = buttonColors,
                 ) {
                     Text("目录")
+                }
+                Button(
+                    onClick = { onDarkModeChange(!darkMode) },
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(8.dp),
+                    colors = buttonColors,
+                ) {
+                    Text(if (darkMode) "亮色" else "暗色")
                 }
                 Button(
                     onClick = onPrevious,

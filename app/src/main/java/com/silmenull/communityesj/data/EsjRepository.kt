@@ -21,7 +21,14 @@ class EsjRepository(context: Context) {
         .readTimeout(30, TimeUnit.SECONDS)
         .build()
 
-    fun hasLoginSession(): Boolean = cookieJar.hasCookies()
+    fun loginSessionState(): LoginSessionState {
+        val hasRequiredCookies = cookieJar.hasCookie("ews_key") && cookieJar.hasCookie("ews_token")
+        return when {
+            hasRequiredCookies -> LoginSessionState.VALID
+            store.hasLoggedInBefore() -> LoginSessionState.EXPIRED
+            else -> LoginSessionState.MISSING
+        }
+    }
 
     fun progressFor(detailUrl: String): ReadingProgress? = store.getProgress(detailUrl)
 
@@ -69,7 +76,9 @@ class EsjRepository(context: Context) {
         LoginResult(
             success = status == 200,
             message = if (status == 200) "登录成功" else message.ifBlank { "登录失败，服务器返回：$loginResponse" },
-        )
+        ).also { result ->
+            if (result.success) store.markLoggedIn()
+        }
     }
 
     suspend fun loadBookshelf(page: Int = 1): BookshelfPage = withContext(Dispatchers.IO) {
@@ -86,15 +95,9 @@ class EsjRepository(context: Context) {
         val detailUrl = book.detailUrl ?: return@withContext null
         val chapters = loadChapters(detailUrl, forceRefresh = false)
         val saved = store.getProgress(detailUrl)
-        val savedChapter = saved?.let { progress ->
-            val remoteProgressTitle = book.lastReadChapter.ifBlank { null }
-            if (remoteProgressTitle == null || remoteProgressTitle == progress.chapterTitle) {
-                chapters.firstOrNull { it.url == progress.chapterUrl && it.title == progress.chapterTitle }
-            } else {
-                null
-            }
-        }
-        savedChapter ?: chapters.firstOrNull()
+        val savedChapter = saved?.let { progress -> chapters.firstOrNull { it.url == progress.chapterUrl } }
+        val remoteLastReadChapter = book.lastReadChapterUrl?.let { url -> chapters.firstOrNull { it.url == url } }
+        savedChapter ?: remoteLastReadChapter ?: chapters.firstOrNull()
     }
 
     suspend fun loadReader(
@@ -108,7 +111,7 @@ class EsjRepository(context: Context) {
                 val chapters = (cached.detailUrl ?: detailUrlHint)
                     ?.let { loadChapters(it, forceRefresh = false) }
                     .orEmpty()
-                return@withContext cached.copy(chapters = chapters.ifEmpty { cached.chapters })
+                return@withContext cached.copy(chapters = markCached(chapters.ifEmpty { cached.chapters }))
             }
         }
 
@@ -123,14 +126,14 @@ class EsjRepository(context: Context) {
 
     suspend fun loadChapters(detailUrl: String, forceRefresh: Boolean = false): List<ChapterLink> = withContext(Dispatchers.IO) {
         if (!forceRefresh) {
-            store.getChapters(detailUrl)?.let { return@withContext it }
+            store.getChapters(detailUrl)?.let { return@withContext markCached(it) }
         }
         val html = executeText(baseRequest(detailUrl).get().build())
         val chapters = EsjParser.parseChapters(html)
         if (chapters.isNotEmpty()) {
             store.saveChapters(detailUrl, chapters)
         }
-        chapters
+        markCached(chapters)
     }
 
     suspend fun prefetchNextChapters(currentUrl: String, chapters: List<ChapterLink>, count: Int = 3) = withContext(Dispatchers.IO) {
@@ -157,6 +160,10 @@ class EsjRepository(context: Context) {
         val firstUrl = chapters.firstOrNull()?.url ?: return null
         val match = Regex("""/forum/(\d+)/""").find(firstUrl) ?: return null
         return "https://www.esjzone.cc/detail/${match.groupValues[1]}.html"
+    }
+
+    private fun markCached(chapters: List<ChapterLink>): List<ChapterLink> {
+        return chapters.map { it.copy(isCached = store.hasChapter(it.url)) }
     }
 
     private fun baseRequest(url: String): Request.Builder {

@@ -44,6 +44,14 @@ class PersistentCookieJar(
         return cookies.any { it.expiresAt > System.currentTimeMillis() }
     }
 
+    @Synchronized
+    fun hasCookie(name: String): Boolean {
+        val now = System.currentTimeMillis()
+        val removed = cookies.removeAll { it.expiresAt < now }
+        if (removed) persist()
+        return cookies.any { it.name == name && it.expiresAt > now }
+    }
+
     private fun restore() {
         preferences.getStringSet(KEY_COOKIES, emptySet()).orEmpty()
             .mapNotNull { Cookie.parse(BASE_URL, it) }

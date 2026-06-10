@@ -19,6 +19,7 @@ data class BookItem(
 data class ChapterLink(
     val title: String,
     val url: String,
+    val isCached: Boolean = false,
 )
 
 data class ReaderChapter(
@@ -44,3 +45,9 @@ data class ReadingProgress(
     val chapterUrl: String,
     val scrollProgress: Float,
 )
+
+enum class LoginSessionState {
+    VALID,
+    EXPIRED,
+    MISSING,
+}
