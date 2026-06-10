@@ -76,6 +76,7 @@ object EsjParser {
             ?.takeIf { it.isNotBlank() }
 
         return ReaderChapter(
+            url = fallbackUrl,
             bookTitle = bookTitle,
             chapterTitle = chapterTitle,
             paragraphs = paragraphs,
