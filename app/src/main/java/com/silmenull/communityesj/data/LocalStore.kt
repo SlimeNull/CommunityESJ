@@ -41,15 +41,15 @@ class LocalStore(context: Context) {
     }
 
     fun saveChapter(chapter: ReaderChapter) {
-        writeJson("chapter-v2", chapter.url, chapter.toJson())
+        writeJson(CHAPTER_CACHE_PREFIX, chapter.url, chapter.toJson())
     }
 
     fun getChapter(url: String): ReaderChapter? {
-        return readJson("chapter-v2", url)?.toReaderChapter()
+        return readJson(CHAPTER_CACHE_PREFIX, url)?.toReaderChapter()
     }
 
     fun hasChapter(url: String): Boolean {
-        return jsonFile("chapter-v2", url).exists()
+        return jsonFile(CHAPTER_CACHE_PREFIX, url).exists()
     }
 
     fun isReaderDarkMode(): Boolean {
@@ -99,6 +99,10 @@ class LocalStore(context: Context) {
 
     private fun jsonFile(prefix: String, key: String): File {
         return File(cacheDir, "$prefix-${key.safeFileName()}.json")
+    }
+
+    private companion object {
+        const val CHAPTER_CACHE_PREFIX = "chapter-v3"
     }
 
     private fun String.safeFileName(): String {

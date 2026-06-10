@@ -10,6 +10,8 @@ import org.json.JSONObject
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 
+class LoginExpiredException : IOException("登录凭证已失效,请重新登录")
+
 class EsjRepository(context: Context) {
     private val store = LocalStore(context.applicationContext)
     private val cookieJar = PersistentCookieJar(store.preferences)
@@ -88,6 +90,9 @@ class EsjRepository(context: Context) {
             "https://www.esjzone.cc/my/favorite/$page.html"
         }
         val html = executeText(baseRequest(url).get().build())
+        if (EsjParser.containsLoginRedirect(html)) {
+            throw LoginExpiredException()
+        }
         EsjParser.parseBookshelf(html, page)
     }
 
@@ -95,7 +100,15 @@ class EsjRepository(context: Context) {
         val detailUrl = book.detailUrl ?: return@withContext null
         val chapters = loadChapters(detailUrl, forceRefresh = false)
         val saved = store.getProgress(detailUrl)
-        val savedChapter = saved?.let { progress -> chapters.firstOrNull { it.url == progress.chapterUrl } }
+        val savedChapter = saved?.chapterUrl
+            ?.takeIf { it.isNotBlank() }
+            ?.let { url ->
+                ChapterLink(
+                    title = saved.chapterTitle.ifBlank { book.lastReadChapter.ifBlank { book.title } },
+                    url = url,
+                    isCached = store.hasChapter(url),
+                )
+            }
         val remoteLastReadChapter = book.lastReadChapterUrl?.let { url -> chapters.firstOrNull { it.url == url } }
         savedChapter ?: remoteLastReadChapter ?: chapters.firstOrNull()
     }

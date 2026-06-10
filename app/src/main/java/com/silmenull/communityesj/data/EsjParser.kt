@@ -8,6 +8,10 @@ import org.jsoup.nodes.TextNode
 
 object EsjParser {
     private const val BASE_URL = "https://www.esjzone.cc"
+    private val loginRedirectRegex = Regex(
+        pattern = """\b(?:window\.)?location(?:\.href)?\s*=\s*['"][^'"]*login[^'"]*['"]""",
+        options = setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL),
+    )
 
     fun parseAuthToken(xml: String): String? {
         return Regex("<JinJing>(.*?)</JinJing>", RegexOption.DOT_MATCHES_ALL)
@@ -28,6 +32,10 @@ object EsjParser {
             currentPage = page,
             totalPages = parseTotalPages(doc).coerceAtLeast(page),
         )
+    }
+
+    fun containsLoginRedirect(html: String): Boolean {
+        return loginRedirectRegex.containsMatchIn(html)
     }
 
     fun parseChapters(html: String): List<ChapterLink> {

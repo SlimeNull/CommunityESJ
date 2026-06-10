@@ -95,6 +95,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -102,12 +103,13 @@ import com.silmenull.communityesj.data.BookItem
 import com.silmenull.communityesj.data.BookshelfPage
 import com.silmenull.communityesj.data.ChapterLink
 import com.silmenull.communityesj.data.EsjRepository
+import com.silmenull.communityesj.data.LoginExpiredException
 import com.silmenull.communityesj.data.LoginSessionState
 import com.silmenull.communityesj.data.ReaderChapter
 import com.silmenull.communityesj.data.ReaderContentBlock
 import com.silmenull.communityesj.data.ReadingProgress
 import com.silmenull.communityesj.ui.theme.CommunityESJTheme
-import coil.compose.AsyncImage
+import coil.compose.SubcomposeAsyncImage
 import coil.imageLoader
 import coil.request.ImageRequest
 import coil.request.SuccessResult
@@ -175,6 +177,7 @@ private class AppState(
     var readerInitialProgress by mutableFloatStateOf(0f)
     var readerScrollProgress by mutableFloatStateOf(0f)
     var readerDarkMode by mutableStateOf(repository.isReaderDarkMode())
+    var bookshelfReloginAction by mutableStateOf(false)
 }
 
 @Composable
@@ -195,6 +198,7 @@ private fun EsjReaderApp() {
         scope.launch {
             appState.isLoading = true
             appState.message = null
+            appState.bookshelfReloginAction = false
             runCatching {
                 appState.repository.loadBookshelf(page)
             }.onSuccess { result ->
@@ -202,11 +206,18 @@ private fun EsjReaderApp() {
                 appState.currentPage = result.currentPage
                 appState.screen = Screen.Bookshelf
             }.onFailure { error ->
-                if (goLoginOnFailure) {
+                val loginExpired = error is LoginExpiredException
+                if (loginExpired) {
                     appState.repository.logout()
-                    appState.screen = Screen.Login
                 }
-                appState.message = error.userMessage("加载书架失败")
+                if (goLoginOnFailure && loginExpired) {
+                    appState.screen = Screen.Login
+                    appState.message = "登录凭证已过期,请重新登录"
+                } else {
+                    appState.screen = Screen.Bookshelf
+                    appState.bookshelfReloginAction = true
+                    appState.message = error.userMessage("加载书架失败")
+                }
             }
             appState.isLoading = false
         }
@@ -295,6 +306,7 @@ private fun EsjReaderApp() {
                         scope.launch {
                             appState.isLoading = true
                             appState.message = null
+                            appState.bookshelfReloginAction = false
                             runCatching {
                                 appState.repository.login(email, password)
                             }.onSuccess { result ->
@@ -318,10 +330,19 @@ private fun EsjReaderApp() {
                     onPage = { loadBookshelf(it) },
                     onOpenBook = ::openBook,
                     onOpenWeb = { openWeb("https://www.esjzone.cc/my/favorite") },
+                    showReloginAction = appState.bookshelfReloginAction,
+                    onRelogin = {
+                        appState.repository.logout()
+                        appState.screen = Screen.Login
+                        appState.message = null
+                        appState.bookshelfReloginAction = false
+                    },
+                    onOpenGithub = { openWeb("https://github.com/SlimeNull/CommunityESJ") },
                     onLogout = {
                         appState.repository.logout()
                         appState.screen = Screen.Login
                         appState.message = null
+                        appState.bookshelfReloginAction = false
                         appState.readerChapter = null
                         appState.bookshelf = BookshelfPage(emptyList(), 1, 1)
                     },
@@ -450,6 +471,9 @@ private fun BookshelfScreen(
     onPage: (Int) -> Unit,
     onOpenBook: (BookItem) -> Unit,
     onOpenWeb: () -> Unit,
+    showReloginAction: Boolean,
+    onRelogin: () -> Unit,
+    onOpenGithub: () -> Unit,
     onLogout: () -> Unit,
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
@@ -513,7 +537,13 @@ private fun BookshelfScreen(
                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
             ) {
                 if (message != null) {
-                    item { MessageText(message) }
+                    item {
+                        BookshelfMessage(
+                            message = message,
+                            showReloginAction = showReloginAction,
+                            onRelogin = onRelogin,
+                        )
+                    }
                 }
                 if (!isLoading && page.books.isEmpty()) {
                     item {
@@ -538,7 +568,24 @@ private fun BookshelfScreen(
         AlertDialog(
             onDismissRequest = { aboutVisible = false },
             title = { Text("关于") },
-            text = { Text("CommunityESJ 是一个简化的 ESJ Zone 阅读客户端，仅包含登录、书架和阅读页。") },
+            text = {
+                Column {
+                    Text("CommunityESJ 是一个简化的 ESJ Zone 阅读客户端，仅包含登录、书架和阅读页。")
+                    Spacer(Modifier.height(12.dp))
+                    Text("GitHub")
+                    Text(
+                        text = "SlimeNull/CommunityESJ",
+                        modifier = Modifier
+                            .padding(top = 4.dp)
+                            .clickable {
+                                aboutVisible = false
+                                onOpenGithub()
+                            },
+                        color = MaterialTheme.colorScheme.primary,
+                        textDecoration = TextDecoration.Underline,
+                    )
+                }
+            },
             confirmButton = {
                 TextButton(onClick = { aboutVisible = false }) {
                     Text("确定")
@@ -734,12 +781,21 @@ private fun ReaderScreen(
 
                         is ReaderContentBlock.Image -> ReaderImage(
                             block = block,
+                            colors = colors,
                             onClick = { imageViewerUrl = block.url },
                         )
                     }
                 }
                 if (message != null) {
                     item { MessageText(message) }
+                }
+                chapter.nextUrl?.let { nextUrl ->
+                    item {
+                        NextChapterFooterButton(
+                            colors = colors,
+                            onClick = { onOpenUrl(nextUrl) },
+                        )
+                    }
                 }
             }
         }
@@ -984,19 +1040,77 @@ private fun ReaderControls(
 }
 
 @Composable
-private fun ReaderImage(
-    block: ReaderContentBlock.Image,
+private fun NextChapterFooterButton(
+    colors: ReaderColors,
     onClick: () -> Unit,
 ) {
-    AsyncImage(
+    Button(
+        onClick = onClick,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 18.dp, bottom = 28.dp),
+        shape = RoundedCornerShape(8.dp),
+        colors = ButtonDefaults.buttonColors(
+            containerColor = colors.accent,
+            contentColor = Color.White,
+        ),
+        contentPadding = PaddingValues(vertical = 14.dp),
+    ) {
+        Text("下一章")
+    }
+}
+
+@Composable
+private fun ReaderImage(
+    block: ReaderContentBlock.Image,
+    colors: ReaderColors,
+    onClick: () -> Unit,
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+
+    SubcomposeAsyncImage(
         model = block.url,
         contentDescription = block.alt.ifBlank { "章节图片" },
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = 12.dp)
             .clip(RoundedCornerShape(6.dp))
-            .clickable(onClick = onClick),
+            .clickable(
+                interactionSource = interactionSource,
+                indication = null,
+                onClick = onClick,
+            ),
+        loading = {
+            ImageLoadingPlaceholder(colors)
+        },
+        error = {
+            Text(
+                text = "图片加载失败",
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(colors.disabled, RoundedCornerShape(6.dp))
+                    .padding(horizontal = 14.dp, vertical = 24.dp),
+                color = colors.disabledText,
+            )
+        },
     )
+}
+
+@Composable
+private fun ImageLoadingPlaceholder(colors: ReaderColors) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(160.dp)
+            .background(colors.disabled, RoundedCornerShape(6.dp)),
+        contentAlignment = Alignment.Center,
+    ) {
+        CircularProgressIndicator(
+            modifier = Modifier.size(26.dp),
+            strokeWidth = 2.5.dp,
+            color = colors.accent,
+        )
+    }
 }
 
 @Composable
@@ -1023,7 +1137,7 @@ private fun ImageViewer(
                 }
             },
     ) {
-        AsyncImage(
+        SubcomposeAsyncImage(
             model = imageUrl,
             contentDescription = "图片预览",
             modifier = Modifier
@@ -1034,6 +1148,22 @@ private fun ImageViewer(
                     translationX = offset.x
                     translationY = offset.y
                 },
+            loading = {
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    CircularProgressIndicator(color = Color.White)
+                }
+            },
+            error = {
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text("图片加载失败", color = Color.White)
+                }
+            },
         )
         Row(
             modifier = Modifier
@@ -1067,6 +1197,43 @@ private fun ImageViewer(
                     .padding(horizontal = 14.dp, vertical = 8.dp),
                 color = Color.White,
             )
+        }
+    }
+}
+
+@Composable
+private fun BookshelfMessage(
+    message: String,
+    showReloginAction: Boolean,
+    onRelogin: () -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 12.dp),
+    ) {
+        Text(
+            text = message,
+            color = MaterialTheme.colorScheme.error,
+        )
+        if (showReloginAction) {
+            Row(
+                modifier = Modifier.padding(top = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = "你可以尝试",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    text = "重新登录",
+                    modifier = Modifier
+                        .padding(start = 2.dp)
+                        .clickable(onClick = onRelogin),
+                    color = MaterialTheme.colorScheme.primary,
+                    textDecoration = TextDecoration.Underline,
+                )
+            }
         }
     }
 }
