@@ -1967,7 +1967,7 @@ private fun ReaderScreen(
                             LazyColumn(
                                 state = chapterListState,
                                 modifier = Modifier.fillMaxSize(),
-                                contentPadding = PaddingValues(end = 8.dp),
+                                contentPadding = PaddingValues(end = 0.dp),
                             ) {
                                 itemsIndexed(chapter!!.chapters) { _, item ->
                                     ChapterListRow(
@@ -1986,7 +1986,7 @@ private fun ReaderScreen(
                                 state = chapterListState,
                                 modifier = Modifier
                                     .align(Alignment.CenterEnd)
-                                    .padding(end = 2.dp),
+                                    .padding(end = 0.dp),
                                 thumbColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.45f),
                                 trackColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
                             )
