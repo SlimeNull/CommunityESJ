@@ -14,25 +14,33 @@ class LocalStore(context: Context) {
 
     fun saveProgress(progress: ReadingProgress) {
         preferences.edit()
-            .putString("progress:${progress.detailUrl}", progress.toJson().toString())
+            .putString(progressKey(progress.detailUrl), progress.toJson().toString())
             .apply()
     }
 
     fun getProgress(detailUrl: String): ReadingProgress? {
-        return preferences.getString("progress:$detailUrl", null)
+        return EsjUrl.cacheKeys(detailUrl)
+            .firstNotNullOfOrNull { key -> preferences.getString("progress:$key", null) }
             ?.let { runCatching { JSONObject(it).toProgress() }.getOrNull() }
     }
 
-    fun saveBookshelf(host: EsjHost, page: BookshelfPage) {
+    fun saveBookshelf(page: BookshelfPage) {
         val json = JSONObject()
             .put("currentPage", page.currentPage)
             .put("totalPages", page.totalPages)
             .put("books", JSONArray(page.books.map { it.toJson() }))
-        writeJson("bookshelf-v1", "${host.host}:${page.currentPage}", json)
+        writeJson("bookshelf-v1", page.currentPage.toString(), json)
     }
 
     fun getBookshelf(host: EsjHost, page: Int = 1): BookshelfPage? {
-        val json = readJson("bookshelf-v1", "${host.host}:$page") ?: return null
+        val json = readJson("bookshelf-v1", page.toString())
+            ?: readJson("bookshelf-v1", "${host.host}:$page")
+            ?: EsjHost.entries
+                .asSequence()
+                .filter { it != host }
+                .mapNotNull { fallbackHost -> readJson("bookshelf-v1", "${fallbackHost.host}:$page") }
+                .firstOrNull()
+            ?: return null
         val booksArray = json.optJSONArray("books") ?: JSONArray()
         val books = buildList {
             for (index in 0 until booksArray.length()) {
@@ -44,10 +52,6 @@ class LocalStore(context: Context) {
             currentPage = json.optInt("currentPage", page).coerceAtLeast(1),
             totalPages = json.optInt("totalPages", page).coerceAtLeast(1),
         )
-    }
-
-    fun getBookshelfCacheHost(page: Int = 1): EsjHost? {
-        return EsjHost.entries.firstOrNull { host -> getBookshelf(host, page) != null }
     }
 
     fun clearSession() {
@@ -97,15 +101,15 @@ class LocalStore(context: Context) {
     }
 
     fun saveChapter(chapter: ReaderChapter) {
-        writeJson(CHAPTER_CACHE_PREFIX, chapter.url, chapter.toJson())
+        writeJson(CHAPTER_CACHE_PREFIX, EsjUrl.cacheKey(chapter.url), chapter.toJson())
     }
 
     fun getChapter(url: String): ReaderChapter? {
-        return readJson(CHAPTER_CACHE_PREFIX, url)?.toReaderChapter()
+        return readJson(CHAPTER_CACHE_PREFIX, EsjUrl.cacheKeys(url))?.toReaderChapter()
     }
 
     fun hasChapter(url: String): Boolean {
-        return jsonFile(CHAPTER_CACHE_PREFIX, url).exists()
+        return EsjUrl.cacheKeys(url).any { key -> jsonFile(CHAPTER_CACHE_PREFIX, key).exists() }
     }
 
     fun isReaderDarkMode(): Boolean {
@@ -150,11 +154,11 @@ class LocalStore(context: Context) {
         val json = JSONObject()
             .put("detailUrl", detailUrl)
             .put("chapters", JSONArray(chapters.map { it.toJson() }))
-        writeJson("chapters", detailUrl, json)
+        writeJson("chapters", EsjUrl.cacheKey(detailUrl), json)
     }
 
     fun getChapters(detailUrl: String): List<ChapterLink>? {
-        return readJson("chapters", detailUrl)
+        return readJson("chapters", EsjUrl.cacheKeys(detailUrl))
             ?.optJSONArray("chapters")
             ?.let { array ->
                 buildList {
@@ -181,8 +185,16 @@ class LocalStore(context: Context) {
         return runCatching { JSONObject(file.readText(StandardCharsets.UTF_8)) }.getOrNull()
     }
 
+    private fun readJson(prefix: String, keys: List<String>): JSONObject? {
+        return keys.firstNotNullOfOrNull { key -> readJson(prefix, key) }
+    }
+
     private fun jsonFile(prefix: String, key: String): File {
         return File(cacheDir, "$prefix-${key.safeFileName()}.json")
+    }
+
+    private fun progressKey(detailUrl: String): String {
+        return "progress:${EsjUrl.cacheKey(detailUrl)}"
     }
 
     private companion object {

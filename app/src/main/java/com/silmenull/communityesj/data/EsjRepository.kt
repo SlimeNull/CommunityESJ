@@ -45,7 +45,7 @@ class EsjRepository(context: Context) {
         }
     }
 
-    fun progressFor(detailUrl: String): ReadingProgress? = store.getProgress(detailUrl)
+    fun progressFor(detailUrl: String): ReadingProgress? = store.getProgress(detailUrl)?.forCurrentHost()
 
     fun hasLoggedInBefore(): Boolean = store.hasLoggedInBefore()
 
@@ -81,28 +81,24 @@ class EsjRepository(context: Context) {
     }
 
     fun cachedBookshelf(page: Int = 1): BookshelfPage? {
-        return store.getBookshelf(selectedHost, page)
+        return store.getBookshelf(selectedHost, page)?.forCurrentHost()
     }
 
     fun hasCachedBookshelf(page: Int = 1): Boolean {
         return cachedBookshelf(page) != null
     }
 
-    fun bookshelfCacheHost(page: Int = 1): EsjHost? {
-        return store.getBookshelf(selectedHost, page)?.let { selectedHost }
-            ?: store.getBookshelfCacheHost(page)
-    }
-
     fun hasAnyCachedBookshelf(page: Int = 1): Boolean {
-        return bookshelfCacheHost(page) != null
+        return hasCachedBookshelf(page)
     }
 
     fun cacheProgressFor(detailUrl: String): BookCacheProgress? {
-        val chapters = store.getChapters(detailUrl) ?: return null
+        val currentDetailUrl = currentHostUrl(detailUrl)
+        val chapters = store.getChapters(currentDetailUrl) ?: return null
         val total = chapters.size
         if (total <= 0) return null
         return BookCacheProgress(
-            detailUrl = detailUrl,
+            detailUrl = currentDetailUrl,
             cached = chapters.count { store.hasChapter(it.url) },
             total = total,
             isRunning = false,
@@ -161,34 +157,35 @@ class EsjRepository(context: Context) {
             throw LoginExpiredException()
         }
         EsjParser.parseBookshelf(html, page, selectedHost.baseUrl)
-            .also { store.saveBookshelf(selectedHost, it) }
+            .also { store.saveBookshelf(it) }
     }
 
     suspend fun resolveBookStart(book: BookItem): ChapterLink? = withContext(Dispatchers.IO) {
-        val detailUrl = book.detailUrl ?: return@withContext null
+        val currentBook = book.forCurrentHost()
+        val detailUrl = currentBook.detailUrl ?: return@withContext null
         val saved = store.getProgress(detailUrl)
         val cachedChapters = store.getChapters(detailUrl)?.let(::markCached)
         val savedCachedChapter = saved?.chapterUrl
             ?.takeIf { store.hasChapter(it) }
             ?.let { url ->
                 ChapterLink(
-                    title = saved.chapterTitle.ifBlank { book.lastReadChapter.ifBlank { book.title } },
-                    url = url,
+                    title = saved.chapterTitle.ifBlank { currentBook.lastReadChapter.ifBlank { currentBook.title } },
+                    url = currentHostUrl(url),
                     isCached = true,
                 )
             }
-        val remoteCachedChapterWithoutList = book.lastReadChapterUrl
+        val remoteCachedChapterWithoutList = currentBook.lastReadChapterUrl
             ?.takeIf { store.hasChapter(it) }
             ?.let { url ->
                 ChapterLink(
-                    title = book.lastReadChapter.ifBlank { book.title },
-                    url = url,
+                    title = currentBook.lastReadChapter.ifBlank { currentBook.title },
+                    url = currentHostUrl(url),
                     isCached = true,
                 )
             }
         if (cachedChapters != null) {
-            val remoteCachedChapter = book.lastReadChapterUrl
-                ?.let { url -> cachedChapters.firstOrNull { it.url == url && it.isCached } }
+            val remoteCachedChapter = currentBook.lastReadChapterUrl
+                ?.let { url -> cachedChapters.firstOrNull { EsjUrl.equivalent(it.url, url) && it.isCached } }
             val firstCachedChapter = cachedChapters.firstOrNull { it.isCached }
             if (savedCachedChapter != null || remoteCachedChapter != null || firstCachedChapter != null) {
                 return@withContext savedCachedChapter ?: remoteCachedChapter ?: firstCachedChapter
@@ -203,12 +200,13 @@ class EsjRepository(context: Context) {
             ?.takeIf { it.isNotBlank() }
             ?.let { url ->
                 ChapterLink(
-                    title = saved.chapterTitle.ifBlank { book.lastReadChapter.ifBlank { book.title } },
-                    url = url,
+                    title = saved.chapterTitle.ifBlank { currentBook.lastReadChapter.ifBlank { currentBook.title } },
+                    url = currentHostUrl(url),
                     isCached = store.hasChapter(url),
                 )
             }
-        val remoteLastReadChapter = book.lastReadChapterUrl?.let { url -> chapters.firstOrNull { it.url == url } }
+        val remoteLastReadChapter = currentBook.lastReadChapterUrl
+            ?.let { url -> chapters.firstOrNull { EsjUrl.equivalent(it.url, url) } }
         savedChapter ?: remoteLastReadChapter ?: chapters.firstOrNull()
     }
 
@@ -225,18 +223,23 @@ class EsjRepository(context: Context) {
                     ?.let { store.getChapters(it)?.let(::markCached) }
                     .orEmpty()
                 return@withContext cached.copy(
+                    url = currentHostUrl(cached.url),
+                    contentBlocks = cached.contentBlocks.map { it.forCurrentHost() },
                     chapters = markCached(chapters.ifEmpty { cached.chapters }),
-                    detailUrl = detailUrl,
+                    previousUrl = currentHostUrlOrNull(cached.previousUrl),
+                    nextUrl = currentHostUrlOrNull(cached.nextUrl),
+                    detailUrl = currentHostUrlOrNull(detailUrl),
                 )
             }
         }
 
-        val readerHtml = executeText(baseRequest(url).get().build())
+        val currentUrl = currentHostUrl(url)
+        val readerHtml = executeText(baseRequest(currentUrl).get().build())
         if (EsjParser.containsLoginRedirect(readerHtml)) {
             throw LoginExpiredException()
         }
-        val parsedReader = EsjParser.parseReader(readerHtml, url)
-        val detailUrl = detailUrlHint ?: parsedReader.detailUrl
+        val parsedReader = EsjParser.parseReader(readerHtml, currentUrl)
+        val detailUrl = currentHostUrlOrNull(detailUrlHint) ?: parsedReader.detailUrl
         val chapters = detailUrl
             ?.let { store.getChapters(it)?.let(::markCached) }
             .orEmpty()
@@ -252,13 +255,14 @@ class EsjRepository(context: Context) {
         if (!forceRefresh) {
             store.getChapters(detailUrl)?.let { return@withContext markCached(it) }
         }
-        val html = executeText(baseRequest(detailUrl).get().build())
+        val currentDetailUrl = currentHostUrl(detailUrl)
+        val html = executeText(baseRequest(currentDetailUrl).get().build())
         if (EsjParser.containsLoginRedirect(html)) {
             throw LoginExpiredException()
         }
-        val chapters = EsjParser.parseChapters(html, detailUrl)
+        val chapters = EsjParser.parseChapters(html, currentDetailUrl)
         if (chapters.isNotEmpty()) {
-            store.saveChapters(detailUrl, chapters)
+            store.saveChapters(currentDetailUrl, chapters)
         }
         markCached(chapters)
     }
@@ -268,7 +272,7 @@ class EsjRepository(context: Context) {
     }
 
     suspend fun prefetchNextChapters(currentUrl: String, chapters: List<ChapterLink>, count: Int = 3) = withContext(Dispatchers.IO) {
-        val currentIndex = chapters.indexOfFirst { it.url == currentUrl }
+        val currentIndex = chapters.indexOfFirst { EsjUrl.equivalent(it.url, currentUrl) }
         if (currentIndex < 0) return@withContext
 
         chapters.drop(currentIndex + 1)
@@ -292,7 +296,10 @@ class EsjRepository(context: Context) {
         knownChapters: List<ChapterLink>,
         onProgress: suspend (BookCacheProgress) -> Unit,
     ) = withContext(Dispatchers.IO) {
-        val chapters = knownChapters.ifEmpty { loadChapters(detailUrl, forceRefresh = false) }
+        val currentDetailUrl = currentHostUrl(detailUrl)
+        val chapters = knownChapters
+            .ifEmpty { loadChapters(currentDetailUrl, forceRefresh = false) }
+            .let(::markCached)
         if (chapters.isEmpty()) {
             throw IOException("没有解析到目录")
         }
@@ -300,7 +307,7 @@ class EsjRepository(context: Context) {
         suspend fun emit(isRunning: Boolean) {
             onProgress(
                 BookCacheProgress(
-                    detailUrl = detailUrl,
+                    detailUrl = currentDetailUrl,
                     cached = chapters.count { store.hasChapter(it.url) },
                     total = chapters.size,
                     isRunning = isRunning,
@@ -313,7 +320,7 @@ class EsjRepository(context: Context) {
             if (!store.hasChapter(chapter.url)) {
                 loadReader(
                     url = chapter.url,
-                    detailUrlHint = detailUrl,
+                    detailUrlHint = currentDetailUrl,
                     forceRefresh = false,
                 )
             }
@@ -329,7 +336,47 @@ class EsjRepository(context: Context) {
     }
 
     private fun markCached(chapters: List<ChapterLink>): List<ChapterLink> {
-        return chapters.map { it.copy(isCached = store.hasChapter(it.url)) }
+        return chapters.map { chapter ->
+            val url = currentHostUrl(chapter.url)
+            chapter.copy(
+                url = url,
+                isCached = store.hasChapter(url),
+            )
+        }
+    }
+
+    private fun BookshelfPage.forCurrentHost(): BookshelfPage {
+        return copy(books = books.map { it.forCurrentHost() })
+    }
+
+    private fun BookItem.forCurrentHost(): BookItem {
+        return copy(
+            detailUrl = currentHostUrlOrNull(detailUrl),
+            latestChapterUrl = currentHostUrlOrNull(latestChapterUrl),
+            lastReadChapterUrl = currentHostUrlOrNull(lastReadChapterUrl),
+        )
+    }
+
+    private fun ReadingProgress.forCurrentHost(): ReadingProgress {
+        return copy(
+            detailUrl = currentHostUrl(detailUrl),
+            chapterUrl = currentHostUrl(chapterUrl),
+        )
+    }
+
+    private fun ReaderContentBlock.forCurrentHost(): ReaderContentBlock {
+        return when (this) {
+            is ReaderContentBlock.Text -> this
+            is ReaderContentBlock.Image -> copy(url = currentHostUrl(url))
+        }
+    }
+
+    private fun currentHostUrl(url: String): String {
+        return EsjUrl.toHost(url, selectedHost) ?: url
+    }
+
+    private fun currentHostUrlOrNull(url: String?): String? {
+        return EsjUrl.toHost(url, selectedHost)
     }
 
     private fun baseRequest(url: String): Request.Builder {
