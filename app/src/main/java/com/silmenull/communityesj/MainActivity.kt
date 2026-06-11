@@ -1785,7 +1785,7 @@ private fun ReaderScreen(
                     contentPadding = PaddingValues(
                         start = readerLayoutSettings.horizontalPaddingDp.dp,
                         top = 44.dp,
-                        end = (readerLayoutSettings.horizontalPaddingDp + 8f).dp,
+                        end = readerLayoutSettings.horizontalPaddingDp.dp,
                         bottom = 44.dp,
                     ),
                 ) {
@@ -1837,7 +1837,7 @@ private fun ReaderScreen(
                     state = listState,
                     modifier = Modifier
                         .align(Alignment.CenterEnd)
-                        .padding(end = 4.dp, top = 44.dp, bottom = 44.dp),
+                        .padding(end = 2.dp, top = 44.dp, bottom = 44.dp),
                     thumbColor = colors.accent.copy(alpha = 0.42f),
                     trackColor = colors.disabled.copy(alpha = 0.28f),
                 )
