@@ -1,5 +1,8 @@
 package com.silmenull.communityesj
 
+import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.drawable.BitmapDrawable
@@ -8,11 +11,15 @@ import android.net.Uri
 import android.os.Bundle
 import android.content.ContentValues
 import android.os.Environment
+import android.view.Window
 import android.view.autofill.AutofillManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.ContentTransform
@@ -100,6 +107,7 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.boundsInWindow
@@ -115,6 +123,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.silmenull.communityesj.data.BookItem
+import com.silmenull.communityesj.data.BookCacheProgress
 import com.silmenull.communityesj.data.BookshelfPage
 import com.silmenull.communityesj.data.ChapterLink
 import com.silmenull.communityesj.data.EsjRepository
@@ -162,6 +171,11 @@ private data class ReaderColors(
     val disabledText: Color,
 )
 
+private data class ReaderSystemBarsState(
+    val showStatusBar: Boolean,
+    val darkMode: Boolean,
+)
+
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -195,6 +209,7 @@ private class AppState(
     var readerDarkMode by mutableStateOf(repository.isReaderDarkMode())
     var bookshelfReloginAction by mutableStateOf(false)
     var selectedHost by mutableStateOf(repository.currentHost())
+    var cacheProgress by mutableStateOf<Map<String, BookCacheProgress>>(emptyMap())
 }
 
 @Composable
@@ -204,6 +219,21 @@ private fun EsjReaderApp() {
     val scope = rememberCoroutineScope()
     val autofillManager = remember(context) {
         context.getSystemService(AutofillManager::class.java)
+    }
+    var readerBarsState by remember { mutableStateOf<ReaderSystemBarsState?>(null) }
+
+    fun updateCacheProgress(progress: BookCacheProgress) {
+        appState.cacheProgress = appState.cacheProgress + (progress.detailUrl to progress)
+    }
+
+    fun syncBookshelfCacheProgress(page: BookshelfPage) {
+        val progress = page.books
+            .mapNotNull { book -> book.detailUrl?.let(appState.repository::cacheProgressFor) }
+            .filter { it.cached > 0 || it.isRunning }
+            .associateBy { it.detailUrl }
+        if (progress.isNotEmpty()) {
+            appState.cacheProgress = appState.cacheProgress + progress
+        }
     }
 
     fun openWeb(url: String) {
@@ -217,11 +247,12 @@ private fun EsjReaderApp() {
     fun switchHost(host: EsjHost) {
         if (!appState.repository.switchHost(host)) return
         appState.selectedHost = appState.repository.currentHost()
-        appState.screen = Screen.Login
-        appState.message = "已切换到${host.displayName},请重新登录"
+        appState.screen = Screen.Bookshelf
+        appState.message = "已切换到${host.displayName}"
         appState.bookshelfReloginAction = false
         appState.readerChapter = null
-        appState.bookshelf = BookshelfPage(emptyList(), 1, 1)
+        appState.bookshelf = appState.repository.cachedBookshelf(1) ?: BookshelfPage(emptyList(), 1, 1)
+        syncBookshelfCacheProgress(appState.bookshelf)
         appState.currentPage = 1
     }
 
@@ -235,15 +266,29 @@ private fun EsjReaderApp() {
             }.onSuccess { result ->
                 appState.bookshelf = result
                 appState.currentPage = result.currentPage
+                syncBookshelfCacheProgress(result)
                 appState.screen = Screen.Bookshelf
             }.onFailure { error ->
                 val loginExpired = error is LoginExpiredException
                 if (loginExpired) {
-                    appState.repository.logout()
+                    appState.repository.expireLogin()
                 }
-                if (goLoginOnFailure && loginExpired) {
-                    appState.screen = Screen.Login
-                    appState.message = "登录凭证已过期,请重新登录"
+                val cached = appState.repository.cachedBookshelf(page)
+                if (cached != null) {
+                    appState.bookshelf = cached
+                    appState.currentPage = cached.currentPage
+                    syncBookshelfCacheProgress(cached)
+                    appState.screen = Screen.Bookshelf
+                    appState.bookshelfReloginAction = true
+                    appState.message = if (loginExpired) {
+                        "登录凭证已过期，已进入离线模式"
+                    } else {
+                        error.userMessage("加载书架失败，已显示本地缓存")
+                    }
+                } else if (goLoginOnFailure && loginExpired) {
+                    appState.screen = Screen.Bookshelf
+                    appState.bookshelfReloginAction = true
+                    appState.message = "登录凭证已过期，没有可用的本地书架缓存"
                 } else {
                     appState.screen = Screen.Bookshelf
                     appState.bookshelfReloginAction = true
@@ -251,6 +296,44 @@ private fun EsjReaderApp() {
                 }
             }
             appState.isLoading = false
+        }
+    }
+
+    fun cacheWholeCurrentBook() {
+        val chapter = appState.readerChapter ?: return
+        val detailUrl = chapter.detailUrl
+        if (detailUrl == null) {
+            appState.message = "当前书籍缺少目录链接，无法缓存整本"
+            return
+        }
+        val existing = appState.cacheProgress[detailUrl]
+        if (existing?.isRunning == true) {
+            appState.message = "当前书籍正在缓存"
+            return
+        }
+        scope.launch {
+            runCatching {
+                appState.repository.cacheWholeBook(
+                    detailUrl = detailUrl,
+                    knownChapters = chapter.chapters,
+                    onProgress = { progress ->
+                        withContext(Dispatchers.Main) {
+                            updateCacheProgress(progress)
+                        }
+                    },
+                )
+            }.onFailure { error ->
+                val total = chapter.chapters.size
+                updateCacheProgress(
+                    BookCacheProgress(
+                        detailUrl = detailUrl,
+                        cached = appState.cacheProgress[detailUrl]?.cached ?: 0,
+                        total = total,
+                        isRunning = false,
+                    ),
+                )
+                appState.message = error.userMessage("缓存整本失败")
+            }
         }
     }
 
@@ -318,10 +401,31 @@ private fun EsjReaderApp() {
     LaunchedEffect(Unit) {
         when (appState.repository.loginSessionState()) {
             LoginSessionState.VALID -> loadBookshelf(goLoginOnFailure = true)
-            LoginSessionState.EXPIRED -> appState.message = "登录凭证已过期,请重新登录"
+            LoginSessionState.EXPIRED -> {
+                appState.repository.cachedBookshelf(1)?.let { cached ->
+                    appState.bookshelf = cached
+                    appState.currentPage = cached.currentPage
+                    syncBookshelfCacheProgress(cached)
+                    appState.screen = Screen.Bookshelf
+                    appState.bookshelfReloginAction = true
+                    appState.message = "登录凭证已过期，已进入离线模式"
+                } ?: run {
+                    appState.screen = Screen.Bookshelf
+                    appState.bookshelfReloginAction = true
+                    appState.message = "登录凭证已过期,请重新登录"
+                }
+            }
             LoginSessionState.MISSING -> Unit
         }
     }
+
+    LaunchedEffect(appState.screen) {
+        if (appState.screen !is Screen.Reader) {
+            readerBarsState = null
+        }
+    }
+
+    ApplySystemBars(readerBarsState)
 
     Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         AnimatedContent(
@@ -366,6 +470,7 @@ private fun EsjReaderApp() {
                     onOpenWeb = { openWeb(appState.repository.favoriteUrl()) },
                     currentHost = appState.selectedHost,
                     onHostChange = ::switchHost,
+                    cacheProgress = appState.cacheProgress,
                     showReloginAction = appState.bookshelfReloginAction,
                     onRelogin = {
                         appState.repository.logout()
@@ -417,9 +522,72 @@ private fun EsjReaderApp() {
                         appState.readerDarkMode = enabled
                         appState.repository.setReaderDarkMode(enabled)
                     },
+                    onCacheWholeBook = ::cacheWholeCurrentBook,
+                    onSystemBarsState = { readerBarsState = it },
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun ApplySystemBars(readerState: ReaderSystemBarsState?) {
+    val context = LocalContext.current
+    val activity = remember(context) { context.findActivity() }
+    val window = activity?.window
+    val decorView = window?.decorView
+    val controller = if (window != null && decorView != null) {
+        WindowCompat.getInsetsController(window, decorView)
+    } else {
+        null
+    }
+
+    LaunchedEffect(window, controller, readerState) {
+        if (window != null && controller != null) {
+            applySystemBars(window, controller, readerState)
+        }
+    }
+
+    DisposableEffect(window, controller) {
+        onDispose {
+            if (window != null && controller != null) {
+                applySystemBars(window, controller, null)
+            }
+        }
+    }
+}
+
+private fun Context.findActivity(): Activity? {
+    return when (this) {
+        is Activity -> this
+        is ContextWrapper -> baseContext.findActivity()
+        else -> null
+    }
+}
+
+@Suppress("DEPRECATION")
+private fun applySystemBars(
+    window: Window,
+    controller: WindowInsetsControllerCompat,
+    readerState: ReaderSystemBarsState?,
+) {
+    if (readerState == null) {
+        controller.show(WindowInsetsCompat.Type.statusBars())
+        controller.isAppearanceLightStatusBars = true
+        window.statusBarColor = Color.Transparent.toArgb()
+        return
+    }
+
+    if (readerState.showStatusBar) {
+        controller.show(WindowInsetsCompat.Type.statusBars())
+    } else {
+        controller.hide(WindowInsetsCompat.Type.statusBars())
+    }
+    controller.isAppearanceLightStatusBars = !readerState.darkMode
+    window.statusBarColor = if (readerState.darkMode) {
+        ReaderDarkBar.toArgb()
+    } else {
+        ReaderBar.toArgb()
     }
 }
 
@@ -594,6 +762,7 @@ private fun BookshelfScreen(
     onOpenWeb: () -> Unit,
     currentHost: EsjHost,
     onHostChange: (EsjHost) -> Unit,
+    cacheProgress: Map<String, BookCacheProgress>,
     showReloginAction: Boolean,
     onRelogin: () -> Unit,
     onOpenGithub: () -> Unit,
@@ -686,7 +855,11 @@ private fun BookshelfScreen(
                     }
                 }
                 items(page.books) { book ->
-                    BookRow(book = book, onClick = { onOpenBook(book) })
+                    BookRow(
+                        book = book,
+                        cacheProgress = book.detailUrl?.let(cacheProgress::get),
+                        onClick = { onOpenBook(book) },
+                    )
                     HorizontalDivider()
                 }
             }
@@ -779,6 +952,7 @@ private fun HostMenuItems(
 @Composable
 private fun BookRow(
     book: BookItem,
+    cacheProgress: BookCacheProgress?,
     onClick: () -> Unit,
 ) {
     Column(
@@ -798,6 +972,19 @@ private fun BookRow(
         InfoLine(label = "最新章节", value = book.latestChapter)
         InfoLine(label = "最后观看", value = book.lastReadChapter)
         InfoLine(label = "更新日期", value = book.updateDate)
+        if (cacheProgress != null && cacheProgress.total > 0) {
+            val text = if (cacheProgress.isRunning) {
+                "缓存中 ${cacheProgress.cached}/${cacheProgress.total}"
+            } else {
+                "已缓存 ${cacheProgress.cached}/${cacheProgress.total}"
+            }
+            Text(
+                text = text,
+                modifier = Modifier.padding(top = 6.dp),
+                color = MaterialTheme.colorScheme.primary,
+                fontSize = 12.sp,
+            )
+        }
     }
 }
 
@@ -865,6 +1052,8 @@ private fun ReaderScreen(
     onOpenUrl: (String) -> Unit,
     onRefresh: () -> Unit,
     onDarkModeChange: (Boolean) -> Unit,
+    onCacheWholeBook: () -> Unit,
+    onSystemBarsState: (ReaderSystemBarsState) -> Unit,
 ) {
     var controlsVisible by remember { mutableStateOf(false) }
     var chapterSheetVisible by remember { mutableStateOf(false) }
@@ -876,8 +1065,18 @@ private fun ReaderScreen(
     val colors = readerColors(darkMode)
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val showStatusBar = controlsVisible || chapterSheetVisible || imageViewerUrl != null
 
     BackHandler(onBack = onBack)
+
+    LaunchedEffect(showStatusBar, darkMode) {
+        onSystemBarsState(
+            ReaderSystemBarsState(
+                showStatusBar = showStatusBar,
+                darkMode = darkMode,
+            ),
+        )
+    }
 
     LaunchedEffect(chapter?.url, initialScrollProgress) {
         if (chapter == null) return@LaunchedEffect
@@ -1009,6 +1208,7 @@ private fun ReaderScreen(
                         chapterSheetVisible = true
                     },
                     onRefresh = onRefresh,
+                    onCacheWholeBook = onCacheWholeBook,
                     onDarkModeChange = onDarkModeChange,
                     onPrevious = { chapter.previousUrl?.let(onOpenUrl) },
                     onNext = { chapter.nextUrl?.let(onOpenUrl) },
@@ -1161,6 +1361,7 @@ private fun ReaderControls(
     onBack: () -> Unit,
     onMenu: () -> Unit,
     onRefresh: () -> Unit,
+    onCacheWholeBook: () -> Unit,
     onDarkModeChange: (Boolean) -> Unit,
     onPrevious: () -> Unit,
     onNext: () -> Unit,
@@ -1215,6 +1416,13 @@ private fun ReaderControls(
                             onClick = {
                                 menuExpanded = false
                                 onRefresh()
+                            },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("缓存整本") },
+                            onClick = {
+                                menuExpanded = false
+                                onCacheWholeBook()
                             },
                         )
                     }

@@ -10,10 +10,8 @@ class PersistentCookieJar(
     baseHost: String,
 ) : CookieJar {
     private val cookies = mutableListOf<Cookie>()
-    private val baseUrl: HttpUrl = HttpUrl.Builder()
-        .scheme("https")
-        .host(baseHost)
-        .build()
+    private var baseHost = baseHost
+    private var baseUrl: HttpUrl = buildBaseUrl(baseHost)
 
     init {
         restore()
@@ -54,7 +52,17 @@ class PersistentCookieJar(
         val now = System.currentTimeMillis()
         val removed = cookies.removeAll { it.expiresAt < now }
         if (removed) persist()
-        return cookies.any { it.name == name && it.expiresAt > now }
+        return cookies.any { it.name == name && it.expiresAt > now && it.matches(baseUrl) }
+    }
+
+    @Synchronized
+    fun switchHost(host: String) {
+        baseHost = host
+        baseUrl = buildBaseUrl(host)
+        val remapped = cookies.mapNotNull { it.copyForHost(host) }
+        cookies.clear()
+        cookies.addAll(remapped.distinctBy { "${it.name}|${it.domain}|${it.path}" })
+        persist()
     }
 
     private fun restore() {
@@ -72,7 +80,34 @@ class PersistentCookieJar(
             .apply()
     }
 
+    private fun Cookie.copyForHost(host: String): Cookie? {
+        return runCatching {
+            Cookie.Builder()
+                .name(name)
+                .value(value)
+                .expiresAt(expiresAt)
+                .path(path)
+                .apply {
+                    if (hostOnly) {
+                        hostOnlyDomain(host)
+                    } else {
+                        domain(host)
+                    }
+                    if (secure) secure()
+                    if (httpOnly) httpOnly()
+                }
+                .build()
+        }.getOrNull()
+    }
+
     private companion object {
         const val KEY_COOKIES = "cookies"
+
+        fun buildBaseUrl(host: String): HttpUrl {
+            return HttpUrl.Builder()
+                .scheme("https")
+                .host(host)
+                .build()
+        }
     }
 }
