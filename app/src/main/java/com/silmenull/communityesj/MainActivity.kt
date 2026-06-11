@@ -123,6 +123,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.silmenull.communityesj.data.BookItem
@@ -627,6 +628,9 @@ private fun applySystemBars(
     controller: WindowInsetsControllerCompat,
     readerState: ReaderSystemBarsState?,
 ) {
+    controller.systemBarsBehavior =
+        WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+
     if (readerState == null) {
         controller.show(WindowInsetsCompat.Type.statusBars())
         controller.isAppearanceLightStatusBars = true
@@ -1065,15 +1069,16 @@ private fun BookRow(
             text = book.title,
             style = MaterialTheme.typography.titleMedium,
             fontWeight = FontWeight.SemiBold,
+            fontSize = 18.sp,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
         )
         if (book.latestChapter.isNotBlank()) {
             Text(
                 text = book.latestChapter,
-                modifier = Modifier.padding(top = 6.dp),
+                modifier = Modifier.padding(top = 2.dp),
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                fontSize = 13.sp,
+                fontSize = 14.sp,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
@@ -1081,7 +1086,7 @@ private fun BookRow(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(top = 8.dp),
+                .padding(top = 4.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -1130,9 +1135,9 @@ private fun CompactMetaChip(
         modifier = modifier
             .clip(RoundedCornerShape(6.dp))
             .background(containerColor)
-            .padding(horizontal = 8.dp, vertical = 3.dp),
+            .padding(horizontal = 4.dp, vertical = 0.dp),
         color = textColor,
-        fontSize = 12.sp,
+        fontSize = 10.sp,
         maxLines = 1,
         overflow = TextOverflow.Ellipsis,
     )
