@@ -19,12 +19,13 @@ class PersistentCookieJar(
 
     @Synchronized
     override fun saveFromResponse(url: HttpUrl, cookies: List<Cookie>) {
+        val normalizedCookies = cookies.mapNotNull { it.copyForHost(baseHost) }
         this.cookies.removeAll { old ->
-            cookies.any { new ->
+            normalizedCookies.any { new ->
                 old.name == new.name && old.domain == new.domain && old.path == new.path
             }
         }
-        this.cookies.addAll(cookies)
+        this.cookies.addAll(normalizedCookies)
         persist()
     }
 
@@ -67,11 +68,14 @@ class PersistentCookieJar(
 
     private fun restore() {
         preferences.getStringSet(KEY_COOKIES, emptySet()).orEmpty()
-            .mapNotNull { Cookie.parse(baseUrl, it) }
+            .mapNotNull(::parseStoredCookie)
+            .mapNotNull { it.copyForHost(baseHost) }
+            .distinctBy { "${it.name}|${it.domain}|${it.path}" }
             .let { restored ->
                 cookies.clear()
                 cookies.addAll(restored)
             }
+        persist()
     }
 
     private fun persist() {
@@ -98,6 +102,14 @@ class PersistentCookieJar(
                 }
                 .build()
         }.getOrNull()
+    }
+
+    private fun parseStoredCookie(cookie: String): Cookie? {
+        val urls = buildList {
+            add(baseUrl)
+            EsjHost.entries.forEach { host -> add(buildBaseUrl(host.host)) }
+        }.distinctBy { it.host }
+        return urls.firstNotNullOfOrNull { url -> Cookie.parse(url, cookie) }
     }
 
     private companion object {
