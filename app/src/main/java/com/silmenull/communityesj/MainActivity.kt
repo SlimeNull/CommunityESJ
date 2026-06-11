@@ -38,6 +38,7 @@ import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -48,6 +49,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
@@ -119,6 +121,8 @@ import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalAutofill
 import androidx.compose.ui.platform.LocalAutofillTree
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.ImeAction
@@ -1590,53 +1594,63 @@ private fun ReaderScreen(
                 modifier = Modifier.align(Alignment.Center),
             )
 
-            else -> LazyColumn(
-                state = listState,
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(start = 22.dp, top = 44.dp, end = 22.dp, bottom = 44.dp),
-            ) {
-                item {
-                    Text(
-                        text = chapter.chapterTitle,
-                        style = MaterialTheme.typography.headlineSmall,
-                        color = colors.text,
-                        fontWeight = FontWeight.Bold,
-                    )
-                    if (chapter.bookTitle.isNotBlank()) {
-                        Text(
-                            text = chapter.bookTitle,
-                            modifier = Modifier.padding(top = 8.dp, bottom = 24.dp),
-                            color = colors.mutedText,
-                        )
-                    } else {
-                        Spacer(Modifier.height(24.dp))
-                    }
-                }
-                items(chapter.contentBlocks) { block ->
-                    when (block) {
-                        is ReaderContentBlock.Text -> Text(
-                            text = block.text,
-                            modifier = Modifier.padding(bottom = 14.dp),
-                            color = colors.text,
-                            fontSize = 19.sp,
-                            lineHeight = 32.sp,
-                        )
-
-                        is ReaderContentBlock.Image -> ReaderImage(
-                            block = block,
-                            colors = colors,
-                            onClick = { imageViewerUrl = block.url },
-                        )
-                    }
-                }
-                chapter.nextUrl?.let { nextUrl ->
+            else -> Box(modifier = Modifier.fillMaxSize()) {
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(start = 22.dp, top = 44.dp, end = 30.dp, bottom = 44.dp),
+                ) {
                     item {
-                        NextChapterFooterButton(
-                            colors = colors,
-                            onClick = { onOpenUrl(nextUrl) },
+                        Text(
+                            text = chapter.chapterTitle,
+                            style = MaterialTheme.typography.headlineSmall,
+                            color = colors.text,
+                            fontWeight = FontWeight.Bold,
                         )
+                        if (chapter.bookTitle.isNotBlank()) {
+                            Text(
+                                text = chapter.bookTitle,
+                                modifier = Modifier.padding(top = 8.dp, bottom = 24.dp),
+                                color = colors.mutedText,
+                            )
+                        } else {
+                            Spacer(Modifier.height(24.dp))
+                        }
+                    }
+                    items(chapter.contentBlocks) { block ->
+                        when (block) {
+                            is ReaderContentBlock.Text -> Text(
+                                text = block.text,
+                                modifier = Modifier.padding(bottom = 14.dp),
+                                color = colors.text,
+                                fontSize = 19.sp,
+                                lineHeight = 32.sp,
+                            )
+
+                            is ReaderContentBlock.Image -> ReaderImage(
+                                block = block,
+                                colors = colors,
+                                onClick = { imageViewerUrl = block.url },
+                            )
+                        }
+                    }
+                    chapter.nextUrl?.let { nextUrl ->
+                        item {
+                            NextChapterFooterButton(
+                                colors = colors,
+                                onClick = { onOpenUrl(nextUrl) },
+                            )
+                        }
                     }
                 }
+                LazyListScrollbar(
+                    state = listState,
+                    modifier = Modifier
+                        .align(Alignment.CenterEnd)
+                        .padding(end = 4.dp, top = 44.dp, bottom = 44.dp),
+                    thumbColor = colors.accent.copy(alpha = 0.42f),
+                    trackColor = colors.disabled.copy(alpha = 0.28f),
+                )
             }
         }
 
@@ -1726,21 +1740,33 @@ private fun ReaderScreen(
                     if (chapter?.chapters.isNullOrEmpty()) {
                         EmptyState("没有解析到目录", modifier = Modifier.fillMaxWidth().padding(top = 48.dp))
                     } else {
-                        LazyColumn(
-                            state = chapterListState,
-                        ) {
-                            itemsIndexed(chapter!!.chapters) { _, item ->
-                                ChapterListRow(
-                                    item = item,
-                                    selected = item.url == chapter.url,
-                                    onClick = {
-                                        chapterSheetVisible = false
-                                        if (item.url != chapter.url) {
-                                            onOpenChapter(item)
-                                        }
-                                    },
-                                )
+                        Box(modifier = Modifier.fillMaxSize()) {
+                            LazyColumn(
+                                state = chapterListState,
+                                modifier = Modifier.fillMaxSize(),
+                                contentPadding = PaddingValues(end = 8.dp),
+                            ) {
+                                itemsIndexed(chapter!!.chapters) { _, item ->
+                                    ChapterListRow(
+                                        item = item,
+                                        selected = item.url == chapter.url,
+                                        onClick = {
+                                            chapterSheetVisible = false
+                                            if (item.url != chapter.url) {
+                                                onOpenChapter(item)
+                                            }
+                                        },
+                                    )
+                                }
                             }
+                            LazyListScrollbar(
+                                state = chapterListState,
+                                modifier = Modifier
+                                    .align(Alignment.CenterEnd)
+                                    .padding(end = 2.dp),
+                                thumbColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.45f),
+                                trackColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+                            )
                         }
                     }
                 }
@@ -1980,19 +2006,86 @@ private fun NextChapterFooterButton(
     colors: ReaderColors,
     onClick: () -> Unit,
 ) {
-    Button(
-        onClick = onClick,
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(top = 18.dp, bottom = 28.dp),
-        shape = RoundedCornerShape(8.dp),
-        colors = ButtonDefaults.buttonColors(
-            containerColor = colors.accent,
-            contentColor = Color.White,
-        ),
-        contentPadding = PaddingValues(vertical = 14.dp),
+    Box(modifier = Modifier.fillMaxWidth()){
+        Text(
+            text = "下一章",
+            fontSize = 18.sp,
+            fontStyle = FontStyle.Italic,
+            modifier = Modifier
+                .align(Alignment.CenterEnd)
+                .padding(top = 12.dp)
+                .clickable(onClick = onClick)
+                .padding(4.dp),
+            color = colors.accent,
+            textDecoration = TextDecoration.Underline,
+        )
+    }
+//
+//    Button(
+//        onClick = onClick,
+//        modifier = Modifier
+//            .fillMaxWidth()
+//            .padding(top = 18.dp, bottom = 28.dp),
+//        shape = RoundedCornerShape(8.dp),
+//        colors = ButtonDefaults.buttonColors(
+//            containerColor = colors.accent,
+//            contentColor = Color.White,
+//        ),
+//        contentPadding = PaddingValues(vertical = 14.dp),
+//    ) {
+//        Text("下一章")
+//    }
+}
+
+@Composable
+private fun LazyListScrollbar(
+    state: LazyListState,
+    modifier: Modifier = Modifier,
+    thumbColor: Color,
+    trackColor: Color,
+) {
+    val layoutInfo = state.layoutInfo
+    val totalItems = layoutInfo.totalItemsCount
+    val visibleItems = layoutInfo.visibleItemsInfo
+    if (totalItems <= 0 || visibleItems.isEmpty()) return
+
+    val firstVisibleIndex = visibleItems.first().index
+    val visibleCount = visibleItems.size.coerceAtLeast(1)
+    if (totalItems <= visibleCount) return
+
+    BoxWithConstraints(
+        modifier = modifier
+            .width(3.dp)
+            .fillMaxHeight()
+            .clip(RoundedCornerShape(999.dp))
+            .background(trackColor),
     ) {
-        Text("下一章")
+        val density = LocalDensity.current
+        val maxHeightPx = with(density) { maxHeight.toPx() }.coerceAtLeast(1f)
+        val viewportSize = (layoutInfo.viewportEndOffset - layoutInfo.viewportStartOffset).coerceAtLeast(1)
+        val averageItemSize = visibleItems
+            .map { it.size }
+            .average()
+            .takeIf { it.isFinite() && it > 0.0 }
+            ?.toFloat()
+            ?: viewportSize.toFloat()
+        val estimatedContentSize = (averageItemSize * totalItems).coerceAtLeast(viewportSize.toFloat())
+        val estimatedScrollOffset = (firstVisibleIndex * averageItemSize + state.firstVisibleItemScrollOffset)
+            .coerceIn(0f, (estimatedContentSize - viewportSize).coerceAtLeast(0f))
+        val scrollableSize = (estimatedContentSize - viewportSize).coerceAtLeast(1f)
+        val thumbHeightPx = (viewportSize / estimatedContentSize * maxHeightPx)
+            .coerceIn(with(density) { 28.dp.toPx() }, maxHeightPx)
+        val thumbOffsetPx = (estimatedScrollOffset / scrollableSize * (maxHeightPx - thumbHeightPx))
+            .coerceIn(0f, maxHeightPx - thumbHeightPx)
+
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(with(density) { thumbHeightPx.toDp() })
+                .offset(y = with(density) { thumbOffsetPx.toDp() })
+                .clip(RoundedCornerShape(999.dp))
+                .background(thumbColor),
+        )
     }
 }
 
