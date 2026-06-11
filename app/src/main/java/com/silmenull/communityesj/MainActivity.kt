@@ -220,7 +220,8 @@ private class AppState(
     var currentPage by mutableIntStateOf(1)
     var readerInitialProgress by mutableFloatStateOf(0f)
     var readerScrollProgress by mutableFloatStateOf(0f)
-    var readerThemePreset by mutableStateOf(repository.readerThemePreset())
+    var readerLightThemePreset by mutableStateOf(repository.readerLightThemePreset())
+    var readerDarkThemePreset by mutableStateOf(repository.readerDarkThemePreset())
     var readerDarkMode by mutableStateOf(repository.isReaderDarkMode())
     var bookshelfReloginAction by mutableStateOf(false)
     var bookshelfOfflineMessage by mutableStateOf<String?>(null)
@@ -649,15 +650,19 @@ private fun EsjReaderApp() {
                 )
 
                 Screen.Settings -> SettingsScreen(
-                    readerThemePreset = appState.readerThemePreset,
+                    readerLightThemePreset = appState.readerLightThemePreset,
+                    readerDarkThemePreset = appState.readerDarkThemePreset,
                     showLatestChapter = appState.showLatestChapter,
                     onBack = {
                         appState.screen = Screen.Bookshelf
                     },
-                    onReaderThemePresetChange = { preset ->
-                        appState.readerThemePreset = preset
-                        appState.readerDarkMode = preset.dark
-                        appState.repository.setReaderThemePreset(preset)
+                    onReaderLightThemePresetChange = { preset ->
+                        appState.readerLightThemePreset = preset
+                        appState.repository.setReaderLightThemePreset(preset)
+                    },
+                    onReaderDarkThemePresetChange = { preset ->
+                        appState.readerDarkThemePreset = preset
+                        appState.repository.setReaderDarkThemePreset(preset)
                     },
                     onShowLatestChapterChange = { enabled ->
                         appState.showLatestChapter = enabled
@@ -696,12 +701,14 @@ private fun EsjReaderApp() {
                         )
                     },
                     onDarkModeChange = { enabled ->
-                        val preset = if (enabled) ReaderThemePreset.NIGHT else ReaderThemePreset.PAPER
-                        appState.readerThemePreset = preset
-                        appState.readerDarkMode = preset.dark
-                        appState.repository.setReaderThemePreset(preset)
+                        appState.readerDarkMode = enabled
+                        appState.repository.setReaderDarkMode(enabled)
                     },
-                    readerThemePreset = appState.readerThemePreset,
+                    readerThemePreset = if (appState.readerDarkMode) {
+                        appState.readerDarkThemePreset
+                    } else {
+                        appState.readerLightThemePreset
+                    },
                     cacheProgress = (appState.readerChapter?.detailUrl ?: screen.detailUrlHint)
                         ?.let(appState.cacheProgress::get),
                     onCacheWholeBook = ::cacheWholeCurrentBook,
@@ -1305,10 +1312,12 @@ private fun CompactMetaChip(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun SettingsScreen(
-    readerThemePreset: ReaderThemePreset,
+    readerLightThemePreset: ReaderThemePreset,
+    readerDarkThemePreset: ReaderThemePreset,
     showLatestChapter: Boolean,
     onBack: () -> Unit,
-    onReaderThemePresetChange: (ReaderThemePreset) -> Unit,
+    onReaderLightThemePresetChange: (ReaderThemePreset) -> Unit,
+    onReaderDarkThemePresetChange: (ReaderThemePreset) -> Unit,
     onShowLatestChapterChange: (Boolean) -> Unit,
 ) {
     BackHandler(onBack = onBack)
@@ -1340,11 +1349,33 @@ private fun SettingsScreen(
                     fontWeight = FontWeight.SemiBold,
                 )
             }
-            items(ReaderThemePreset.entries) { preset ->
+            item {
+                Text(
+                    text = "亮色模式",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 13.sp,
+                )
+            }
+            items(ReaderThemePreset.entries.filterNot { it.dark }) { preset ->
                 ReaderThemePresetRow(
                     preset = preset,
-                    selected = preset == readerThemePreset,
-                    onClick = { onReaderThemePresetChange(preset) },
+                    selected = preset == readerLightThemePreset,
+                    onClick = { onReaderLightThemePresetChange(preset) },
+                )
+            }
+            item {
+                Text(
+                    text = "暗色模式",
+                    modifier = Modifier.padding(top = 6.dp),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 13.sp,
+                )
+            }
+            items(ReaderThemePreset.entries.filter { it.dark }) { preset ->
+                ReaderThemePresetRow(
+                    preset = preset,
+                    selected = preset == readerDarkThemePreset,
+                    onClick = { onReaderDarkThemePresetChange(preset) },
                 )
             }
             item {

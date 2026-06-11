@@ -82,8 +82,12 @@ enum class ReaderThemePreset(
     SLATE("石墨", true);
 
     companion object {
+        fun fromNameOrNull(name: String?): ReaderThemePreset? {
+            return entries.firstOrNull { it.name == name }
+        }
+
         fun fromName(name: String?): ReaderThemePreset {
-            return entries.firstOrNull { it.name == name } ?: PAPER
+            return fromNameOrNull(name) ?: PAPER
         }
     }
 }

@@ -113,30 +113,53 @@ class LocalStore(context: Context) {
     }
 
     fun isReaderDarkMode(): Boolean {
-        return getReaderThemePreset().dark
+        return preferences.getBoolean("reader_dark_mode", legacyReaderThemePreset()?.dark ?: false)
     }
 
     fun setReaderDarkMode(enabled: Boolean) {
-        val preset = if (enabled) ReaderThemePreset.NIGHT else ReaderThemePreset.PAPER
-        setReaderThemePreset(preset)
+        preferences.edit()
+            .putBoolean("reader_dark_mode", enabled)
+            .apply()
     }
 
     fun getReaderThemePreset(): ReaderThemePreset {
-        val storedPreset = preferences.getString("reader_theme_preset", null)
-        if (storedPreset != null) {
-            return ReaderThemePreset.fromName(storedPreset)
-        }
-        return if (preferences.getBoolean("reader_dark_mode", false)) {
-            ReaderThemePreset.NIGHT
-        } else {
-            ReaderThemePreset.PAPER
-        }
+        return if (isReaderDarkMode()) getReaderDarkThemePreset() else getReaderLightThemePreset()
     }
 
     fun setReaderThemePreset(preset: ReaderThemePreset) {
+        if (preset.dark) {
+            setReaderDarkThemePreset(preset)
+        } else {
+            setReaderLightThemePreset(preset)
+        }
+        setReaderDarkMode(preset.dark)
+    }
+
+    fun getReaderLightThemePreset(): ReaderThemePreset {
+        return ReaderThemePreset.fromNameOrNull(preferences.getString("reader_light_theme_preset", null))
+            ?.takeUnless { it.dark }
+            ?: legacyReaderThemePreset()?.takeUnless { it.dark }
+            ?: ReaderThemePreset.PAPER
+    }
+
+    fun setReaderLightThemePreset(preset: ReaderThemePreset) {
+        val safePreset = preset.takeUnless { it.dark } ?: ReaderThemePreset.PAPER
         preferences.edit()
-            .putString("reader_theme_preset", preset.name)
-            .putBoolean("reader_dark_mode", preset.dark)
+            .putString("reader_light_theme_preset", safePreset.name)
+            .apply()
+    }
+
+    fun getReaderDarkThemePreset(): ReaderThemePreset {
+        return ReaderThemePreset.fromNameOrNull(preferences.getString("reader_dark_theme_preset", null))
+            ?.takeIf { it.dark }
+            ?: legacyReaderThemePreset()?.takeIf { it.dark }
+            ?: ReaderThemePreset.NIGHT
+    }
+
+    fun setReaderDarkThemePreset(preset: ReaderThemePreset) {
+        val safePreset = preset.takeIf { it.dark } ?: ReaderThemePreset.NIGHT
+        preferences.edit()
+            .putString("reader_dark_theme_preset", safePreset.name)
             .apply()
     }
 
@@ -195,6 +218,10 @@ class LocalStore(context: Context) {
 
     private fun progressKey(detailUrl: String): String {
         return "progress:${EsjUrl.cacheKey(detailUrl)}"
+    }
+
+    private fun legacyReaderThemePreset(): ReaderThemePreset? {
+        return ReaderThemePreset.fromNameOrNull(preferences.getString("reader_theme_preset", null))
     }
 
     private companion object {
