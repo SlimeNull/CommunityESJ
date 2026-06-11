@@ -287,17 +287,34 @@ private fun EsjReaderApp() {
     fun switchHost(host: EsjHost) {
         if (!appState.repository.switchHost(host)) return
         appState.selectedHost = appState.repository.currentHost()
-        appState.screen = Screen.Bookshelf
         appState.message = "已切换到${host.displayName}"
         appState.bookshelfReloginAction = false
         appState.bookshelfOfflineMessage = null
-        appState.readerChapter = null
-        appState.bookshelf = appState.repository.cachedBookshelf(1) ?: BookshelfPage(emptyList(), 1, 1)
-        syncBookshelfCacheProgress(appState.bookshelf)
-        appState.currentPage = 1
+        when (appState.screen) {
+            Screen.Login -> {
+                if (appState.repository.hasLoggedInBefore()) {
+                    appState.screen = Screen.Bookshelf
+                    appState.bookshelf = appState.repository.cachedBookshelf(1) ?: BookshelfPage(emptyList(), 1, 1)
+                    syncBookshelfCacheProgress(appState.bookshelf)
+                    appState.currentPage = 1
+                }
+            }
+            Screen.Bookshelf, Screen.Settings -> {
+                appState.screen = Screen.Bookshelf
+                appState.readerChapter = null
+                appState.bookshelf = appState.repository.cachedBookshelf(1) ?: BookshelfPage(emptyList(), 1, 1)
+                syncBookshelfCacheProgress(appState.bookshelf)
+                appState.currentPage = 1
+            }
+            is Screen.Reader -> Unit
+        }
     }
 
-    fun loadBookshelf(page: Int = 1, goLoginOnFailure: Boolean = false) {
+    fun loadBookshelf(
+        page: Int = 1,
+        goLoginOnFailure: Boolean = false,
+        navigateToBookshelf: Boolean = true,
+    ) {
         scope.launch {
             appState.isLoading = true
             appState.bookshelfRefreshing = false
@@ -310,7 +327,9 @@ private fun EsjReaderApp() {
                 appState.bookshelf = result
                 appState.currentPage = result.currentPage
                 syncBookshelfCacheProgress(result)
-                appState.screen = Screen.Bookshelf
+                if (navigateToBookshelf) {
+                    appState.screen = Screen.Bookshelf
+                }
             }.onFailure { error ->
                 val loginExpired = error is LoginExpiredException
                 if (loginExpired) {
@@ -321,7 +340,9 @@ private fun EsjReaderApp() {
                     appState.bookshelf = cached
                     appState.currentPage = cached.currentPage
                     syncBookshelfCacheProgress(cached)
-                    appState.screen = Screen.Bookshelf
+                    if (navigateToBookshelf) {
+                        appState.screen = Screen.Bookshelf
+                    }
                     appState.bookshelfReloginAction = true
                     appState.bookshelfOfflineMessage = if (loginExpired) {
                         "登录凭证已过期，已进入离线模式"
@@ -330,12 +351,16 @@ private fun EsjReaderApp() {
                     }
                     appState.message = null
                 } else if (goLoginOnFailure && loginExpired) {
-                    appState.screen = Screen.Bookshelf
+                    if (navigateToBookshelf) {
+                        appState.screen = Screen.Bookshelf
+                    }
                     appState.bookshelfReloginAction = true
                     appState.bookshelfOfflineMessage = null
                     appState.message = "登录凭证已过期，没有可用的本地书架缓存"
                 } else {
-                    appState.screen = Screen.Bookshelf
+                    if (navigateToBookshelf) {
+                        appState.screen = Screen.Bookshelf
+                    }
                     appState.bookshelfReloginAction = true
                     appState.bookshelfOfflineMessage = null
                     appState.message = error.userMessage("加载书架失败")
@@ -357,7 +382,6 @@ private fun EsjReaderApp() {
                 appState.bookshelf = result
                 appState.currentPage = result.currentPage
                 syncBookshelfCacheProgress(result)
-                appState.screen = Screen.Bookshelf
             }.onFailure { error ->
                 val loginExpired = error is LoginExpiredException
                 if (loginExpired) {
@@ -789,102 +813,105 @@ private fun LoginScreen(
                 .fillMaxSize()
                 .padding(innerPadding)
                 .padding(horizontal = 24.dp),
-            verticalArrangement = Arrangement.Center,
         ) {
-            Text(
-                text = "ESJ 轻阅",
-                style = MaterialTheme.typography.headlineMedium,
-                fontWeight = FontWeight.Bold,
-            )
-            Text(
-                text = "ESJ Read",
-                modifier = Modifier.padding(top = 8.dp),
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Text(
-                text = currentHost.displayName,
-                modifier = Modifier.padding(top = 6.dp),
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                fontSize = 13.sp,
-            )
-            Spacer(Modifier.height(28.dp))
-            OutlinedTextField(
-                value = email,
-                onValueChange = { email = it },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .autofill(
-                        autofillTypes = listOf(AutofillType.EmailAddress, AutofillType.Username),
-                        onFill = { email = it },
+            Spacer(Modifier.weight(0.82f))
+            Column(modifier = Modifier.fillMaxWidth()) {
+                Text(
+                    text = "ESJ 轻阅",
+                    style = MaterialTheme.typography.headlineMedium,
+                    fontWeight = FontWeight.Bold,
+                )
+                Text(
+                    text = "ESJ Read",
+                    modifier = Modifier.padding(top = 8.dp),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    text = currentHost.displayName,
+                    modifier = Modifier.padding(top = 6.dp),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 13.sp,
+                )
+                Spacer(Modifier.height(28.dp))
+                OutlinedTextField(
+                    value = email,
+                    onValueChange = { email = it },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .autofill(
+                            autofillTypes = listOf(AutofillType.EmailAddress, AutofillType.Username),
+                            onFill = { email = it },
+                        ),
+                    enabled = !isLoading,
+                    singleLine = true,
+                    label = { Text("邮箱") },
+                    keyboardOptions = KeyboardOptions(
+                        keyboardType = KeyboardType.Email,
+                        imeAction = ImeAction.Next,
                     ),
-                enabled = !isLoading,
-                singleLine = true,
-                label = { Text("邮箱") },
-                keyboardOptions = KeyboardOptions(
-                    keyboardType = KeyboardType.Email,
-                    imeAction = ImeAction.Next,
-                ),
-            )
-            Spacer(Modifier.height(12.dp))
-            OutlinedTextField(
-                value = password,
-                onValueChange = { password = it },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .autofill(
-                        autofillTypes = listOf(AutofillType.Password),
-                        onFill = { password = it },
+                )
+                Spacer(Modifier.height(12.dp))
+                OutlinedTextField(
+                    value = password,
+                    onValueChange = { password = it },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .autofill(
+                            autofillTypes = listOf(AutofillType.Password),
+                            onFill = { password = it },
+                        ),
+                    enabled = !isLoading,
+                    singleLine = true,
+                    label = { Text("密码") },
+                    visualTransformation = PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(
+                        keyboardType = KeyboardType.Password,
+                        imeAction = ImeAction.Done,
                     ),
-                enabled = !isLoading,
-                singleLine = true,
-                label = { Text("密码") },
-                visualTransformation = PasswordVisualTransformation(),
-                keyboardOptions = KeyboardOptions(
-                    keyboardType = KeyboardType.Password,
-                    imeAction = ImeAction.Done,
-                ),
-                keyboardActions = KeyboardActions(
-                    onDone = {
-                        if (canSubmit) {
-                            onLogin(email.trim(), password)
-                        }
-                    },
-                ),
-            )
-            Spacer(Modifier.height(20.dp))
-            Button(
-                onClick = { onLogin(email.trim(), password) },
-                modifier = Modifier.fillMaxWidth(),
-                enabled = canSubmit,
-            ) {
-                if (isLoading) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(18.dp),
-                        strokeWidth = 2.dp,
-                        color = MaterialTheme.colorScheme.onPrimary,
+                    keyboardActions = KeyboardActions(
+                        onDone = {
+                            if (canSubmit) {
+                                onLogin(email.trim(), password)
+                            }
+                        },
+                    ),
+                )
+                Spacer(Modifier.height(20.dp))
+                Button(
+                    onClick = { onLogin(email.trim(), password) },
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = canSubmit,
+                ) {
+                    if (isLoading) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(18.dp),
+                            strokeWidth = 2.dp,
+                            color = MaterialTheme.colorScheme.onPrimary,
+                        )
+                    } else {
+                        Text("登录")
+                    }
+                }
+                if (showOfflineAction) {
+                    Text(
+                        text = "离线模式",
+                        modifier = Modifier
+                            .align(Alignment.CenterHorizontally)
+                            .padding(top = 12.dp)
+                            .clickable(onClick = onOffline),
+                        color = MaterialTheme.colorScheme.primary,
+                        textDecoration = TextDecoration.Underline,
                     )
-                } else {
-                    Text("登录")
+                }
+                if (message != null) {
+                    Text(
+                        text = message,
+                        modifier = Modifier.padding(top = 16.dp),
+                        color = MaterialTheme.colorScheme.error,
+                    )
                 }
             }
-            if (showOfflineAction) {
-                Text(
-                    text = "离线模式",
-                    modifier = Modifier
-                        .align(Alignment.CenterHorizontally)
-                        .padding(top = 12.dp)
-                        .clickable(onClick = onOffline),
-                    color = MaterialTheme.colorScheme.primary,
-                    textDecoration = TextDecoration.Underline,
-                )
-            }
-            if (message != null) {
-                Text(
-                    text = message,
-                    modifier = Modifier.padding(top = 16.dp),
-                    color = MaterialTheme.colorScheme.error,
-                )
-            }
+            Spacer(Modifier.weight(1.18f))
         }
     }
 }
