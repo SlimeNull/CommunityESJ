@@ -214,7 +214,7 @@ private class AppState(
 ) {
     var screen by mutableStateOf<Screen>(Screen.Login)
     var isLoading by mutableStateOf(false)
-    var message by mutableStateOf<String?>(null)
+    var feedbackDialogMessage by mutableStateOf<String?>(null)
     var bookshelf by mutableStateOf(BookshelfPage(emptyList(), 1, 1))
     var readerChapter by mutableStateOf<ReaderChapter?>(null)
     var currentPage by mutableIntStateOf(1)
@@ -242,6 +242,16 @@ private fun EsjReaderApp() {
         context.getSystemService(AutofillManager::class.java)
     }
     var readerBarsState by remember { mutableStateOf<ReaderSystemBarsState?>(null) }
+
+    fun showFeedback(message: String, forceDialog: Boolean = false) {
+        val text = message.trim()
+        if (text.isBlank()) return
+        if (forceDialog || text.length > 36 || text.contains('\n')) {
+            appState.feedbackDialogMessage = text
+        } else {
+            Toast.makeText(context, text, Toast.LENGTH_SHORT).show()
+        }
+    }
 
     fun updateCacheProgress(progress: BookCacheProgress) {
         appState.cacheProgress = appState.cacheProgress + (progress.detailUrl to progress)
@@ -280,15 +290,13 @@ private fun EsjReaderApp() {
     fun openWeb(url: String) {
         runCatching {
             context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
-        }.onFailure { error ->
-            appState.message = error.userMessage("无法打开网页")
-        }
+        }.onFailure { error -> showFeedback(error.userMessage("无法打开网页")) }
     }
 
     fun switchHost(host: EsjHost) {
         if (!appState.repository.switchHost(host)) return
         appState.selectedHost = appState.repository.currentHost()
-        appState.message = "已切换到${host.displayName}"
+        showFeedback("已切换到${host.displayName}")
         appState.bookshelfReloginAction = false
         appState.bookshelfOfflineMessage = null
         when (appState.screen) {
@@ -319,7 +327,6 @@ private fun EsjReaderApp() {
         scope.launch {
             appState.isLoading = true
             appState.bookshelfRefreshing = false
-            appState.message = null
             appState.bookshelfReloginAction = false
             appState.bookshelfOfflineMessage = null
             runCatching {
@@ -350,21 +357,20 @@ private fun EsjReaderApp() {
                     } else {
                         error.userMessage("加载书架失败，已显示本地缓存")
                     }
-                    appState.message = null
                 } else if (goLoginOnFailure && loginExpired) {
                     if (navigateToBookshelf) {
                         appState.screen = Screen.Bookshelf
                     }
                     appState.bookshelfReloginAction = true
                     appState.bookshelfOfflineMessage = null
-                    appState.message = "登录凭证已过期，没有可用的本地书架缓存"
+                    showFeedback("登录凭证已过期，没有可用的本地书架缓存")
                 } else {
                     if (navigateToBookshelf) {
                         appState.screen = Screen.Bookshelf
                     }
                     appState.bookshelfReloginAction = true
                     appState.bookshelfOfflineMessage = null
-                    appState.message = error.userMessage("加载书架失败")
+                    showFeedback(error.userMessage("加载书架失败"))
                 }
             }
             appState.isLoading = false
@@ -374,7 +380,6 @@ private fun EsjReaderApp() {
     fun refreshBookshelfInBackground(page: Int = appState.currentPage) {
         scope.launch {
             appState.bookshelfRefreshing = true
-            appState.message = null
             appState.bookshelfOfflineMessage = null
             appState.bookshelfReloginAction = false
             runCatching {
@@ -403,17 +408,17 @@ private fun EsjReaderApp() {
         val chapter = appState.readerChapter ?: return
         val detailUrl = chapter.detailUrl
         if (detailUrl == null) {
-            appState.message = "当前书籍缺少目录链接，无法缓存整本"
+            showFeedback("当前书籍缺少目录链接，无法缓存整本")
             return
         }
         val existing = appState.cacheProgress[detailUrl]
         if (existing?.isRunning == true) {
             appState.cacheJobs.remove(detailUrl)?.cancel()
             updateCacheProgress(existing.copy(isRunning = false))
-            Toast.makeText(context, "已停止缓存", Toast.LENGTH_SHORT).show()
+            showFeedback("已停止缓存")
             return
         }
-        Toast.makeText(context, "已开始缓存", Toast.LENGTH_SHORT).show()
+        showFeedback("已开始缓存")
         updateCacheProgress(
             BookCacheProgress(
                 detailUrl = detailUrl,
@@ -446,7 +451,7 @@ private fun EsjReaderApp() {
                         isRunning = false,
                     ),
                 )
-                appState.message = error.userMessage("缓存整本失败")
+                showFeedback(error.userMessage("缓存整本失败"))
             }.also {
                 clearCacheJob(detailUrl)
             }
@@ -466,7 +471,6 @@ private fun EsjReaderApp() {
         appState.readerScrollProgress = appState.readerInitialProgress
         scope.launch {
             appState.isLoading = true
-            appState.message = null
             if (!wasReader) {
                 appState.readerChapter = null
             }
@@ -477,9 +481,7 @@ private fun EsjReaderApp() {
                 scope.launch {
                     appState.repository.prefetchNextChapters(chapter.url, chapter.chapters)
                 }
-            }.onFailure { error ->
-                appState.message = error.userMessage("加载章节失败")
-            }
+            }.onFailure { error -> showFeedback(error.userMessage("加载章节失败")) }
             appState.isLoading = false
         }
     }
@@ -488,19 +490,16 @@ private fun EsjReaderApp() {
         val chapter = appState.readerChapter ?: return
         val detailUrl = chapter.detailUrl
         if (detailUrl == null) {
-            appState.message = "当前书籍缺少目录链接，无法刷新目录"
+            showFeedback("当前书籍缺少目录链接，无法刷新目录")
             return
         }
         scope.launch {
             appState.isLoading = true
-            appState.message = null
             runCatching {
                 appState.repository.refreshChapters(detailUrl)
             }.onSuccess { chapters ->
                 appState.readerChapter = appState.readerChapter?.copy(chapters = chapters)
-            }.onFailure { error ->
-                appState.message = error.userMessage("刷新目录失败")
-            }
+            }.onFailure { error -> showFeedback(error.userMessage("刷新目录失败")) }
             appState.isLoading = false
         }
     }
@@ -508,18 +507,17 @@ private fun EsjReaderApp() {
     fun openBook(book: BookItem) {
         val detailUrl = book.detailUrl
         if (detailUrl == null) {
-            appState.message = "这本书缺少目录链接"
+            showFeedback("这本书缺少目录链接")
             return
         }
 
         scope.launch {
             appState.isLoading = true
-            appState.message = null
             runCatching {
                 appState.repository.resolveBookStart(book)
             }.onSuccess { chapter ->
                 if (chapter == null) {
-                    appState.message = "没有找到可阅读章节"
+                    showFeedback("没有找到可阅读章节")
                     appState.isLoading = false
                     return@onSuccess
                 }
@@ -530,7 +528,7 @@ private fun EsjReaderApp() {
                 appState.isLoading = false
                 openReader(chapter.url, detailUrl, restoredProgress)
             }.onFailure { error ->
-                appState.message = error.userMessage("加载目录失败")
+                showFeedback(error.userMessage("加载目录失败"))
                 appState.isLoading = false
             }
         }
@@ -553,7 +551,7 @@ private fun EsjReaderApp() {
                 appState.screen = Screen.Bookshelf
                 appState.bookshelfReloginAction = true
                 appState.bookshelfOfflineMessage = null
-                appState.message = "登录凭证已过期,请重新登录"
+                showFeedback("登录凭证已过期,请重新登录")
             }
             LoginSessionState.MISSING -> Unit
         }
@@ -576,13 +574,11 @@ private fun EsjReaderApp() {
             when (screen) {
                 Screen.Login -> LoginScreen(
                     isLoading = appState.isLoading,
-                    message = appState.message,
                     currentHost = appState.selectedHost,
                     showOfflineAction = appState.repository.hasAnyCachedBookshelf(),
                     onHostChange = ::switchHost,
                     onOffline = {
                         if (showCachedBookshelf(1)) {
-                            appState.message = null
                             appState.bookshelfReloginAction = true
                             appState.bookshelfOfflineMessage = "当前正在查看本地缓存"
                         }
@@ -590,20 +586,17 @@ private fun EsjReaderApp() {
                     onLogin = { email, password ->
                         scope.launch {
                             appState.isLoading = true
-                            appState.message = null
                             appState.bookshelfReloginAction = false
                             appState.bookshelfOfflineMessage = null
                             runCatching {
                                 appState.repository.login(email, password)
                             }.onSuccess { result ->
-                                appState.message = result.message
+                                showFeedback(result.message)
                                 if (result.success) {
                                     autofillManager?.commit()
                                     loadBookshelf()
                                 }
-                            }.onFailure { error ->
-                                appState.message = error.userMessage("登录失败")
-                            }
+                            }.onFailure { error -> showFeedback(error.userMessage("登录失败")) }
                             appState.isLoading = false
                         }
                     },
@@ -612,7 +605,6 @@ private fun EsjReaderApp() {
                 Screen.Bookshelf -> BookshelfScreen(
                     page = appState.bookshelf,
                     isLoading = appState.isLoading,
-                    message = appState.message,
                     offlineMessage = appState.bookshelfOfflineMessage,
                     isRefreshing = appState.bookshelfRefreshing,
                     onRefresh = { loadBookshelf(appState.currentPage) },
@@ -623,24 +615,14 @@ private fun EsjReaderApp() {
                     onHostChange = ::switchHost,
                     cacheProgress = appState.cacheProgress,
                     localProgress = appState.localProgress,
-                    showReloginAction = appState.bookshelfReloginAction,
                     showLatestChapter = appState.showLatestChapter,
                     onOpenSettings = {
                         appState.screen = Screen.Settings
-                        appState.message = null
-                    },
-                    onRelogin = {
-                        appState.repository.logout()
-                        appState.screen = Screen.Login
-                        appState.message = null
-                        appState.bookshelfReloginAction = false
-                        appState.bookshelfOfflineMessage = null
                     },
                     onOpenGithub = { openWeb("https://github.com/SlimeNull/CommunityESJ") },
                     onLogout = {
                         appState.repository.logout()
                         appState.screen = Screen.Login
-                        appState.message = null
                         appState.bookshelfReloginAction = false
                         appState.bookshelfOfflineMessage = null
                         appState.readerChapter = null
@@ -673,12 +655,10 @@ private fun EsjReaderApp() {
                 is Screen.Reader -> ReaderScreen(
                     chapter = appState.readerChapter,
                     isLoading = appState.isLoading,
-                    message = appState.message,
                     initialScrollProgress = appState.readerInitialProgress,
                     darkMode = appState.readerDarkMode,
                     onBack = {
                         appState.screen = Screen.Bookshelf
-                        appState.message = null
                     },
                     onProgress = { progress ->
                         appState.readerScrollProgress = progress.scrollProgress
@@ -714,9 +694,23 @@ private fun EsjReaderApp() {
                     onCacheWholeBook = ::cacheWholeCurrentBook,
                     onRefreshChapters = ::refreshCurrentBookChapters,
                     onSystemBarsState = { readerBarsState = it },
+                    onFeedback = ::showFeedback,
                 )
             }
         }
+    }
+
+    appState.feedbackDialogMessage?.let { message ->
+        AlertDialog(
+            onDismissRequest = { appState.feedbackDialogMessage = null },
+            title = { Text("提示") },
+            text = { Text(message) },
+            confirmButton = {
+                TextButton(onClick = { appState.feedbackDialogMessage = null }) {
+                    Text("确定")
+                }
+            },
+        )
     }
 }
 
@@ -789,7 +783,6 @@ private fun applySystemBars(
 @Composable
 private fun LoginScreen(
     isLoading: Boolean,
-    message: String?,
     currentHost: EsjHost,
     showOfflineAction: Boolean,
     onHostChange: (EsjHost) -> Unit,
@@ -910,13 +903,6 @@ private fun LoginScreen(
                         textDecoration = TextDecoration.Underline,
                     )
                 }
-                if (message != null) {
-                    Text(
-                        text = message,
-                        modifier = Modifier.padding(top = 16.dp),
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                }
             }
             Spacer(Modifier.weight(1.18f))
         }
@@ -964,7 +950,6 @@ private fun Modifier.autofill(
 private fun BookshelfScreen(
     page: BookshelfPage,
     isLoading: Boolean,
-    message: String?,
     offlineMessage: String?,
     isRefreshing: Boolean,
     onRefresh: () -> Unit,
@@ -975,10 +960,8 @@ private fun BookshelfScreen(
     onHostChange: (EsjHost) -> Unit,
     cacheProgress: Map<String, BookCacheProgress>,
     localProgress: Map<String, ReadingProgress>,
-    showReloginAction: Boolean,
     showLatestChapter: Boolean,
     onOpenSettings: () -> Unit,
-    onRelogin: () -> Unit,
     onOpenGithub: () -> Unit,
     onLogout: () -> Unit,
 ) {
@@ -1085,15 +1068,6 @@ private fun BookshelfScreen(
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
             ) {
-                if (message != null) {
-                    item {
-                        BookshelfMessage(
-                            message = message,
-                            showReloginAction = showReloginAction,
-                            onRelogin = onRelogin,
-                        )
-                    }
-                }
                 if (!isLoading && page.books.isEmpty()) {
                     item {
                         EmptyState(
@@ -1514,7 +1488,6 @@ private fun PageBar(
 private fun ReaderScreen(
     chapter: ReaderChapter?,
     isLoading: Boolean,
-    message: String?,
     initialScrollProgress: Float,
     darkMode: Boolean,
     onBack: () -> Unit,
@@ -1528,11 +1501,11 @@ private fun ReaderScreen(
     onCacheWholeBook: () -> Unit,
     onRefreshChapters: () -> Unit,
     onSystemBarsState: (ReaderSystemBarsState) -> Unit,
+    onFeedback: (String, Boolean) -> Unit,
 ) {
     var controlsVisible by remember { mutableStateOf(false) }
     var chapterSheetVisible by remember { mutableStateOf(false) }
     var imageViewerUrl by remember { mutableStateOf<String?>(null) }
-    var imageSaveMessage by remember { mutableStateOf<String?>(null) }
     val listState = rememberLazyListState()
     val chapterListState = rememberLazyListState()
     val interactionSource = remember { MutableInteractionSource() }
@@ -1613,7 +1586,7 @@ private fun ReaderScreen(
         when {
             isLoading && chapter == null -> LoadingOverlay()
             chapter == null -> EmptyState(
-                text = message ?: "章节尚未加载",
+                text = "章节尚未加载",
                 modifier = Modifier.align(Alignment.Center),
             )
 
@@ -1655,9 +1628,6 @@ private fun ReaderScreen(
                             onClick = { imageViewerUrl = block.url },
                         )
                     }
-                }
-                if (message != null) {
-                    item { MessageText(message) }
                 }
                 chapter.nextUrl?.let { nextUrl ->
                     item {
@@ -1782,19 +1752,17 @@ private fun ReaderScreen(
     if (currentImage != null) {
         ImageViewer(
             imageUrl = currentImage,
-            message = imageSaveMessage,
             onDismiss = {
                 imageViewerUrl = null
-                imageSaveMessage = null
             },
             onSave = {
                 scope.launch {
-                    imageSaveMessage = "保存中..."
-                    imageSaveMessage = runCatching {
+                    onFeedback("保存中...", false)
+                    runCatching {
                         saveImageToGallery(context, currentImage)
-                        "已保存到相册"
+                        onFeedback("已保存到相册", false)
                     }.getOrElse { error ->
-                        error.userMessage("保存失败")
+                        onFeedback(error.userMessage("保存失败"), false)
                     }
                 }
             },
@@ -2084,7 +2052,6 @@ private fun ImageLoadingPlaceholder(colors: ReaderColors) {
 @Composable
 private fun ImageViewer(
     imageUrl: String,
-    message: String?,
     onDismiss: () -> Unit,
     onSave: () -> Unit,
 ) {
@@ -2154,67 +2121,7 @@ private fun ImageViewer(
                 )
             }
         }
-        if (message != null) {
-            Text(
-                text = message,
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .windowInsetsPadding(WindowInsets.navigationBars)
-                    .padding(18.dp)
-                    .background(Color.Black.copy(alpha = 0.62f), RoundedCornerShape(8.dp))
-                    .padding(horizontal = 14.dp, vertical = 8.dp),
-                color = Color.White,
-            )
-        }
     }
-}
-
-@Composable
-private fun BookshelfMessage(
-    message: String,
-    showReloginAction: Boolean,
-    onRelogin: () -> Unit,
-) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 12.dp),
-    ) {
-        Text(
-            text = message,
-            color = MaterialTheme.colorScheme.error,
-        )
-        if (showReloginAction) {
-            Row(
-                modifier = Modifier.padding(top = 6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    text = "你可以尝试",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Text(
-                    text = "重新登录",
-                    modifier = Modifier
-                        .padding(start = 2.dp)
-                        .clickable(onClick = onRelogin),
-                    color = MaterialTheme.colorScheme.primary,
-                    textDecoration = TextDecoration.Underline,
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun MessageText(message: String) {
-    Text(
-        text = message,
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 12.dp),
-        color = MaterialTheme.colorScheme.error,
-    )
 }
 
 @Composable
