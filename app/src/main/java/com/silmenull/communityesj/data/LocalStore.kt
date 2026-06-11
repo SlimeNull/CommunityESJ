@@ -23,6 +23,29 @@ class LocalStore(context: Context) {
             ?.let { runCatching { JSONObject(it).toProgress() }.getOrNull() }
     }
 
+    fun saveBookshelf(host: EsjHost, page: BookshelfPage) {
+        val json = JSONObject()
+            .put("currentPage", page.currentPage)
+            .put("totalPages", page.totalPages)
+            .put("books", JSONArray(page.books.map { it.toJson() }))
+        writeJson("bookshelf-v1", "${host.host}:${page.currentPage}", json)
+    }
+
+    fun getBookshelf(host: EsjHost, page: Int = 1): BookshelfPage? {
+        val json = readJson("bookshelf-v1", "${host.host}:$page") ?: return null
+        val booksArray = json.optJSONArray("books") ?: JSONArray()
+        val books = buildList {
+            for (index in 0 until booksArray.length()) {
+                booksArray.optJSONObject(index)?.toBookItem()?.let(::add)
+            }
+        }
+        return BookshelfPage(
+            books = books,
+            currentPage = json.optInt("currentPage", page).coerceAtLeast(1),
+            totalPages = json.optInt("totalPages", page).coerceAtLeast(1),
+        )
+    }
+
     fun clearSession() {
         preferences.edit()
             .remove("cookies")
@@ -142,6 +165,31 @@ class LocalStore(context: Context) {
         return JSONObject()
             .put("title", title)
             .put("url", url)
+    }
+
+    private fun BookItem.toJson(): JSONObject {
+        return JSONObject()
+            .put("title", title)
+            .put("latestChapter", latestChapter)
+            .put("lastReadChapter", lastReadChapter)
+            .put("updateDate", updateDate)
+            .put("detailUrl", detailUrl)
+            .put("latestChapterUrl", latestChapterUrl)
+            .put("lastReadChapterUrl", lastReadChapterUrl)
+    }
+
+    private fun JSONObject.toBookItem(): BookItem? {
+        val title = optString("title")
+        if (title.isBlank()) return null
+        return BookItem(
+            title = title,
+            latestChapter = optString("latestChapter"),
+            lastReadChapter = optString("lastReadChapter"),
+            updateDate = optString("updateDate"),
+            detailUrl = optString("detailUrl").takeIf { it.isNotBlank() && it != "null" },
+            latestChapterUrl = optString("latestChapterUrl").takeIf { it.isNotBlank() && it != "null" },
+            lastReadChapterUrl = optString("lastReadChapterUrl").takeIf { it.isNotBlank() && it != "null" },
+        )
     }
 
     private fun ReaderChapter.toJson(): JSONObject {

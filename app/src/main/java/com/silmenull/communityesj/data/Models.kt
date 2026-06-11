@@ -54,6 +54,16 @@ data class ReadingProgress(
     val scrollProgress: Float,
 )
 
+data class BookCacheProgress(
+    val detailUrl: String,
+    val cached: Int,
+    val total: Int,
+    val isRunning: Boolean,
+) {
+    val isComplete: Boolean
+        get() = total > 0 && cached >= total
+}
+
 enum class LoginSessionState {
     VALID,
     EXPIRED,
