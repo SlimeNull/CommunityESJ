@@ -54,6 +54,29 @@ data class ReadingProgress(
     val scrollProgress: Float,
 )
 
+data class ReaderLayoutSettings(
+    val fontFamily: ReaderFontFamily = ReaderFontFamily.SYSTEM,
+    val fontSizeSp: Float = 19f,
+    val paragraphSpacingDp: Float = 14f,
+    val firstLineIndentEm: Float = 2f,
+    val horizontalPaddingDp: Float = 22f,
+)
+
+enum class ReaderFontFamily(
+    val displayName: String,
+) {
+    SYSTEM("系统默认"),
+    SERIF("衬线"),
+    SANS_SERIF("无衬线"),
+    MONOSPACE("等宽");
+
+    companion object {
+        fun fromName(name: String?): ReaderFontFamily {
+            return entries.firstOrNull { it.name == name } ?: SYSTEM
+        }
+    }
+}
+
 data class BookCacheProgress(
     val detailUrl: String,
     val cached: Int,

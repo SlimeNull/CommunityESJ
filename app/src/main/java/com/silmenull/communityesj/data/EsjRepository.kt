@@ -77,6 +77,12 @@ class EsjRepository(context: Context) {
         store.setReaderDarkThemePreset(preset)
     }
 
+    fun readerLayoutSettings(): ReaderLayoutSettings = store.getReaderLayoutSettings()
+
+    fun setReaderLayoutSettings(settings: ReaderLayoutSettings) {
+        store.setReaderLayoutSettings(settings)
+    }
+
     fun showLatestChapterOnBookshelf(): Boolean = store.showLatestChapterOnBookshelf()
 
     fun setShowLatestChapterOnBookshelf(enabled: Boolean) {
