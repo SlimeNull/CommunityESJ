@@ -228,7 +228,9 @@ class EsjRepository(context: Context) {
         }
         val parsedReader = EsjParser.parseReader(readerHtml, url)
         val detailUrl = detailUrlHint ?: parsedReader.detailUrl
-        val chapters = detailUrl?.let { loadChapters(it, forceRefresh = forceRefresh) }.orEmpty()
+        val chapters = detailUrl
+            ?.let { store.getChapters(it)?.let(::markCached) }
+            .orEmpty()
         val chapter = parsedReader.copy(
             chapters = chapters,
             detailUrl = detailUrl,
@@ -250,6 +252,10 @@ class EsjRepository(context: Context) {
             store.saveChapters(detailUrl, chapters)
         }
         markCached(chapters)
+    }
+
+    suspend fun refreshChapters(detailUrl: String): List<ChapterLink> {
+        return loadChapters(detailUrl, forceRefresh = true)
     }
 
     suspend fun prefetchNextChapters(currentUrl: String, chapters: List<ChapterLink>, count: Int = 3) = withContext(Dispatchers.IO) {

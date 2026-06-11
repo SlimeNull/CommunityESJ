@@ -459,6 +459,27 @@ private fun EsjReaderApp() {
         }
     }
 
+    fun refreshCurrentBookChapters() {
+        val chapter = appState.readerChapter ?: return
+        val detailUrl = chapter.detailUrl
+        if (detailUrl == null) {
+            appState.message = "当前书籍缺少目录链接，无法刷新目录"
+            return
+        }
+        scope.launch {
+            appState.isLoading = true
+            appState.message = null
+            runCatching {
+                appState.repository.refreshChapters(detailUrl)
+            }.onSuccess { chapters ->
+                appState.readerChapter = appState.readerChapter?.copy(chapters = chapters)
+            }.onFailure { error ->
+                appState.message = error.userMessage("刷新目录失败")
+            }
+            appState.isLoading = false
+        }
+    }
+
     fun openBook(book: BookItem) {
         val detailUrl = book.detailUrl
         if (detailUrl == null) {
@@ -660,6 +681,7 @@ private fun EsjReaderApp() {
                     cacheProgress = (appState.readerChapter?.detailUrl ?: screen.detailUrlHint)
                         ?.let(appState.cacheProgress::get),
                     onCacheWholeBook = ::cacheWholeCurrentBook,
+                    onRefreshChapters = ::refreshCurrentBookChapters,
                     onSystemBarsState = { readerBarsState = it },
                 )
             }
@@ -1446,6 +1468,7 @@ private fun ReaderScreen(
     readerThemePreset: ReaderThemePreset,
     cacheProgress: BookCacheProgress?,
     onCacheWholeBook: () -> Unit,
+    onRefreshChapters: () -> Unit,
     onSystemBarsState: (ReaderSystemBarsState) -> Unit,
 ) {
     var controlsVisible by remember { mutableStateOf(false) }
@@ -1656,12 +1679,22 @@ private fun ReaderScreen(
                         .windowInsetsPadding(WindowInsets.navigationBars)
                         .padding(horizontal = 16.dp, vertical = 14.dp),
                 ) {
-                    Text(
-                        text = "目录",
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(bottom = 8.dp),
-                    )
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = "目录",
+                            modifier = Modifier.weight(1f),
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Bold,
+                        )
+                        TextButton(onClick = onRefreshChapters) {
+                            Text("刷新")
+                        }
+                    }
                     if (chapter?.chapters.isNullOrEmpty()) {
                         EmptyState("没有解析到目录", modifier = Modifier.fillMaxWidth().padding(top = 48.dp))
                     } else {
