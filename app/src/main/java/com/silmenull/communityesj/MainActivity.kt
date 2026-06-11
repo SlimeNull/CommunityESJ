@@ -664,6 +664,14 @@ private fun EsjReaderApp() {
                         appState.showLatestChapter = enabled
                         appState.repository.setShowLatestChapterOnBookshelf(enabled)
                     },
+                    onResetSettings = {
+                        appState.readerLightThemePreset = ReaderThemePreset.PAPER
+                        appState.readerDarkThemePreset = ReaderThemePreset.NIGHT
+                        appState.readerLayoutSettings = ReaderLayoutSettings()
+                        appState.showLatestChapter = true
+                        appState.repository.resetDisplaySettings()
+                        showFeedback("已重置设置")
+                    },
                 )
 
                 is Screen.Reader -> ReaderScreen(
@@ -1310,6 +1318,7 @@ private fun SettingsScreen(
     onReaderDarkThemePresetChange: (ReaderThemePreset) -> Unit,
     onReaderLayoutSettingsChange: (ReaderLayoutSettings) -> Unit,
     onShowLatestChapterChange: (Boolean) -> Unit,
+    onResetSettings: () -> Unit,
 ) {
     BackHandler(onBack = onBack)
 
@@ -1407,6 +1416,20 @@ private fun SettingsScreen(
             }
             item {
                 ReaderSettingSlider(
+                    title = "行间距",
+                    valueText = "${(readerLayoutSettings.lineHeightMultiplier * 100f).roundToInt()}%",
+                    value = readerLayoutSettings.lineHeightMultiplier,
+                    valueRange = 1.2f..2.4f,
+                    steps = 23,
+                    onValueChange = { value ->
+                        onReaderLayoutSettingsChange(
+                            readerLayoutSettings.copy(lineHeightMultiplier = (value * 20f).roundToInt() / 20f),
+                        )
+                    },
+                )
+            }
+            item {
+                ReaderSettingSlider(
                     title = "段落间距",
                     valueText = "${readerLayoutSettings.paragraphSpacingDp.roundToInt()} dp",
                     value = readerLayoutSettings.paragraphSpacingDp,
@@ -1472,6 +1495,16 @@ private fun SettingsScreen(
                         checked = showLatestChapter,
                         onCheckedChange = onShowLatestChapterChange,
                     )
+                }
+            }
+            item {
+                OutlinedButton(
+                    onClick = onResetSettings,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 8.dp, bottom = 12.dp),
+                ) {
+                    Text("重置")
                 }
             }
         }
@@ -1693,7 +1726,7 @@ private fun ReaderScreen(
     val interactionSource = remember { MutableInteractionSource() }
     val colors = readerColors(readerThemePreset)
     val readerFontSize = readerLayoutSettings.fontSizeSp.sp
-    val readerLineHeight = (readerLayoutSettings.fontSizeSp * 1.68f).sp
+    val readerLineHeight = (readerLayoutSettings.fontSizeSp * readerLayoutSettings.lineHeightMultiplier).sp
     val readerTextStyle = TextStyle(
         fontFamily = readerLayoutSettings.fontFamily.toFontFamily(),
         textIndent = TextIndent(firstLine = (readerLayoutSettings.fontSizeSp * readerLayoutSettings.firstLineIndentEm).sp),
