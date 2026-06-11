@@ -53,14 +53,33 @@ class LocalStore(context: Context) {
             .apply()
     }
 
-    fun markLoggedIn() {
+    fun clearUserCache() {
+        cacheDir.listFiles()?.forEach { file ->
+            if (file.isFile) {
+                file.delete()
+            }
+        }
+        preferences.edit().apply {
+            preferences.all.keys
+                .filter { it.startsWith("progress:") }
+                .forEach(::remove)
+        }.apply()
+    }
+
+    fun markLoggedIn(email: String) {
         preferences.edit()
             .putBoolean("has_logged_in", true)
+            .putString("login_email", email)
             .apply()
     }
 
     fun hasLoggedInBefore(): Boolean {
         return preferences.getBoolean("has_logged_in", false)
+    }
+
+    fun getLoginEmail(): String? {
+        return preferences.getString("login_email", null)
+            ?.takeIf { it.isNotBlank() }
     }
 
     fun getHost(): EsjHost {
@@ -86,12 +105,40 @@ class LocalStore(context: Context) {
     }
 
     fun isReaderDarkMode(): Boolean {
-        return preferences.getBoolean("reader_dark_mode", false)
+        return getReaderThemePreset().dark
     }
 
     fun setReaderDarkMode(enabled: Boolean) {
+        val preset = if (enabled) ReaderThemePreset.NIGHT else ReaderThemePreset.PAPER
+        setReaderThemePreset(preset)
+    }
+
+    fun getReaderThemePreset(): ReaderThemePreset {
+        val storedPreset = preferences.getString("reader_theme_preset", null)
+        if (storedPreset != null) {
+            return ReaderThemePreset.fromName(storedPreset)
+        }
+        return if (preferences.getBoolean("reader_dark_mode", false)) {
+            ReaderThemePreset.NIGHT
+        } else {
+            ReaderThemePreset.PAPER
+        }
+    }
+
+    fun setReaderThemePreset(preset: ReaderThemePreset) {
         preferences.edit()
-            .putBoolean("reader_dark_mode", enabled)
+            .putString("reader_theme_preset", preset.name)
+            .putBoolean("reader_dark_mode", preset.dark)
+            .apply()
+    }
+
+    fun showLatestChapterOnBookshelf(): Boolean {
+        return preferences.getBoolean("show_latest_chapter", true)
+    }
+
+    fun setShowLatestChapterOnBookshelf(enabled: Boolean) {
+        preferences.edit()
+            .putBoolean("show_latest_chapter", enabled)
             .apply()
     }
 
