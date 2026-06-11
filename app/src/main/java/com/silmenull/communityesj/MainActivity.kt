@@ -13,6 +13,7 @@ import android.content.ContentValues
 import android.os.Environment
 import android.view.Window
 import android.view.autofill.AutofillManager
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
@@ -49,6 +50,7 @@ import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyColumn
@@ -60,6 +62,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.DarkMode
+import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.LightMode
 import androidx.compose.material.icons.automirrored.filled.List
@@ -139,10 +142,16 @@ import coil.imageLoader
 import coil.request.ImageRequest
 import coil.request.SuccessResult
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.IOException
+import java.time.Duration
+import java.time.LocalDate
+import java.time.LocalDateTime
+import java.time.format.DateTimeFormatter
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
@@ -208,8 +217,11 @@ private class AppState(
     var readerScrollProgress by mutableFloatStateOf(0f)
     var readerDarkMode by mutableStateOf(repository.isReaderDarkMode())
     var bookshelfReloginAction by mutableStateOf(false)
+    var bookshelfOfflineMessage by mutableStateOf<String?>(null)
     var selectedHost by mutableStateOf(repository.currentHost())
     var cacheProgress by mutableStateOf<Map<String, BookCacheProgress>>(emptyMap())
+    var localProgress by mutableStateOf<Map<String, ReadingProgress>>(emptyMap())
+    var cacheJobs = mutableMapOf<String, Job>()
 }
 
 @Composable
@@ -226,6 +238,13 @@ private fun EsjReaderApp() {
         appState.cacheProgress = appState.cacheProgress + (progress.detailUrl to progress)
     }
 
+    fun clearCacheJob(detailUrl: String) {
+        appState.cacheJobs.remove(detailUrl)
+        appState.cacheProgress[detailUrl]?.let { progress ->
+            updateCacheProgress(progress.copy(isRunning = false))
+        }
+    }
+
     fun syncBookshelfCacheProgress(page: BookshelfPage) {
         val progress = page.books
             .mapNotNull { book -> book.detailUrl?.let(appState.repository::cacheProgressFor) }
@@ -234,6 +253,10 @@ private fun EsjReaderApp() {
         if (progress.isNotEmpty()) {
             appState.cacheProgress = appState.cacheProgress + progress
         }
+        val readingProgress = page.books
+            .mapNotNull { book -> book.detailUrl?.let { detailUrl -> appState.repository.progressFor(detailUrl) } }
+            .associateBy { it.detailUrl }
+        appState.localProgress = readingProgress
     }
 
     fun openWeb(url: String) {
@@ -250,6 +273,7 @@ private fun EsjReaderApp() {
         appState.screen = Screen.Bookshelf
         appState.message = "已切换到${host.displayName}"
         appState.bookshelfReloginAction = false
+        appState.bookshelfOfflineMessage = null
         appState.readerChapter = null
         appState.bookshelf = appState.repository.cachedBookshelf(1) ?: BookshelfPage(emptyList(), 1, 1)
         syncBookshelfCacheProgress(appState.bookshelf)
@@ -261,6 +285,7 @@ private fun EsjReaderApp() {
             appState.isLoading = true
             appState.message = null
             appState.bookshelfReloginAction = false
+            appState.bookshelfOfflineMessage = null
             runCatching {
                 appState.repository.loadBookshelf(page)
             }.onSuccess { result ->
@@ -280,18 +305,21 @@ private fun EsjReaderApp() {
                     syncBookshelfCacheProgress(cached)
                     appState.screen = Screen.Bookshelf
                     appState.bookshelfReloginAction = true
-                    appState.message = if (loginExpired) {
+                    appState.bookshelfOfflineMessage = if (loginExpired) {
                         "登录凭证已过期，已进入离线模式"
                     } else {
                         error.userMessage("加载书架失败，已显示本地缓存")
                     }
+                    appState.message = null
                 } else if (goLoginOnFailure && loginExpired) {
                     appState.screen = Screen.Bookshelf
                     appState.bookshelfReloginAction = true
+                    appState.bookshelfOfflineMessage = null
                     appState.message = "登录凭证已过期，没有可用的本地书架缓存"
                 } else {
                     appState.screen = Screen.Bookshelf
                     appState.bookshelfReloginAction = true
+                    appState.bookshelfOfflineMessage = null
                     appState.message = error.userMessage("加载书架失败")
                 }
             }
@@ -308,10 +336,21 @@ private fun EsjReaderApp() {
         }
         val existing = appState.cacheProgress[detailUrl]
         if (existing?.isRunning == true) {
-            appState.message = "当前书籍正在缓存"
+            appState.cacheJobs.remove(detailUrl)?.cancel()
+            updateCacheProgress(existing.copy(isRunning = false))
+            Toast.makeText(context, "已停止缓存", Toast.LENGTH_SHORT).show()
             return
         }
-        scope.launch {
+        Toast.makeText(context, "已开始缓存", Toast.LENGTH_SHORT).show()
+        updateCacheProgress(
+            BookCacheProgress(
+                detailUrl = detailUrl,
+                cached = existing?.cached ?: chapter.chapters.count { it.isCached },
+                total = existing?.total?.takeIf { it > 0 } ?: chapter.chapters.size,
+                isRunning = true,
+            ),
+        )
+        val job = scope.launch {
             runCatching {
                 appState.repository.cacheWholeBook(
                     detailUrl = detailUrl,
@@ -323,6 +362,9 @@ private fun EsjReaderApp() {
                     },
                 )
             }.onFailure { error ->
+                if (error is CancellationException) {
+                    return@onFailure
+                }
                 val total = chapter.chapters.size
                 updateCacheProgress(
                     BookCacheProgress(
@@ -333,8 +375,11 @@ private fun EsjReaderApp() {
                     ),
                 )
                 appState.message = error.userMessage("缓存整本失败")
+            }.also {
+                clearCacheJob(detailUrl)
             }
         }
+        appState.cacheJobs[detailUrl] = job
     }
 
     fun openReader(
@@ -408,10 +453,12 @@ private fun EsjReaderApp() {
                     syncBookshelfCacheProgress(cached)
                     appState.screen = Screen.Bookshelf
                     appState.bookshelfReloginAction = true
-                    appState.message = "登录凭证已过期，已进入离线模式"
+                    appState.bookshelfOfflineMessage = "登录凭证已过期，已进入离线模式"
+                    appState.message = null
                 } ?: run {
                     appState.screen = Screen.Bookshelf
                     appState.bookshelfReloginAction = true
+                    appState.bookshelfOfflineMessage = null
                     appState.message = "登录凭证已过期,请重新登录"
                 }
             }
@@ -444,6 +491,7 @@ private fun EsjReaderApp() {
                             appState.isLoading = true
                             appState.message = null
                             appState.bookshelfReloginAction = false
+                            appState.bookshelfOfflineMessage = null
                             runCatching {
                                 appState.repository.login(email, password)
                             }.onSuccess { result ->
@@ -464,6 +512,7 @@ private fun EsjReaderApp() {
                     page = appState.bookshelf,
                     isLoading = appState.isLoading,
                     message = appState.message,
+                    offlineMessage = appState.bookshelfOfflineMessage,
                     onRefresh = { loadBookshelf(appState.currentPage) },
                     onPage = { loadBookshelf(it) },
                     onOpenBook = ::openBook,
@@ -471,12 +520,14 @@ private fun EsjReaderApp() {
                     currentHost = appState.selectedHost,
                     onHostChange = ::switchHost,
                     cacheProgress = appState.cacheProgress,
+                    localProgress = appState.localProgress,
                     showReloginAction = appState.bookshelfReloginAction,
                     onRelogin = {
                         appState.repository.logout()
                         appState.screen = Screen.Login
                         appState.message = null
                         appState.bookshelfReloginAction = false
+                        appState.bookshelfOfflineMessage = null
                     },
                     onOpenGithub = { openWeb("https://github.com/SlimeNull/CommunityESJ") },
                     onLogout = {
@@ -484,8 +535,10 @@ private fun EsjReaderApp() {
                         appState.screen = Screen.Login
                         appState.message = null
                         appState.bookshelfReloginAction = false
+                        appState.bookshelfOfflineMessage = null
                         appState.readerChapter = null
                         appState.bookshelf = BookshelfPage(emptyList(), 1, 1)
+                        appState.localProgress = emptyMap()
                     },
                 )
 
@@ -502,6 +555,7 @@ private fun EsjReaderApp() {
                     onProgress = { progress ->
                         appState.readerScrollProgress = progress.scrollProgress
                         appState.repository.saveProgress(progress)
+                        appState.localProgress = appState.localProgress + (progress.detailUrl to progress)
                     },
                     onOpenChapter = { chapter ->
                         openReader(chapter.url, appState.readerChapter?.detailUrl ?: screen.detailUrlHint)
@@ -522,6 +576,8 @@ private fun EsjReaderApp() {
                         appState.readerDarkMode = enabled
                         appState.repository.setReaderDarkMode(enabled)
                     },
+                    cacheProgress = (appState.readerChapter?.detailUrl ?: screen.detailUrlHint)
+                        ?.let(appState.cacheProgress::get),
                     onCacheWholeBook = ::cacheWholeCurrentBook,
                     onSystemBarsState = { readerBarsState = it },
                 )
@@ -756,6 +812,7 @@ private fun BookshelfScreen(
     page: BookshelfPage,
     isLoading: Boolean,
     message: String?,
+    offlineMessage: String?,
     onRefresh: () -> Unit,
     onPage: (Int) -> Unit,
     onOpenBook: (BookItem) -> Unit,
@@ -763,6 +820,7 @@ private fun BookshelfScreen(
     currentHost: EsjHost,
     onHostChange: (EsjHost) -> Unit,
     cacheProgress: Map<String, BookCacheProgress>,
+    localProgress: Map<String, ReadingProgress>,
     showReloginAction: Boolean,
     onRelogin: () -> Unit,
     onOpenGithub: () -> Unit,
@@ -770,11 +828,33 @@ private fun BookshelfScreen(
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
     var aboutVisible by remember { mutableStateOf(false) }
+    var offlineDialogVisible by remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("书架") },
+                title = {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text("书架")
+                        Spacer(modifier = Modifier.width(8.dp))
+                        if (offlineMessage != null) {
+                            IconButton(
+                                onClick = { offlineDialogVisible = true },
+                                modifier = Modifier
+                                    .padding(start = 4.dp)
+                                    .size(32.dp),
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.CloudOff,
+                                    contentDescription = "离线模式",
+                                    tint = MaterialTheme.colorScheme.error,
+                                )
+                            }
+                        }
+                    }
+                },
                 actions = {
                     TextButton(onClick = onRefresh, enabled = !isLoading) { Text("刷新") }
                     Box {
@@ -858,6 +938,7 @@ private fun BookshelfScreen(
                     BookRow(
                         book = book,
                         cacheProgress = book.detailUrl?.let(cacheProgress::get),
+                        localProgress = book.detailUrl?.let(localProgress::get),
                         onClick = { onOpenBook(book) },
                     )
                     HorizontalDivider()
@@ -894,6 +975,19 @@ private fun BookshelfScreen(
             confirmButton = {
                 TextButton(onClick = { aboutVisible = false }) {
                     Text("确定")
+                }
+            },
+        )
+    }
+
+    if (offlineDialogVisible && offlineMessage != null) {
+        AlertDialog(
+            onDismissRequest = { offlineDialogVisible = false },
+            title = { Text("离线模式") },
+            text = { Text(offlineMessage) },
+            confirmButton = {
+                TextButton(onClick = { offlineDialogVisible = false }) {
+                    Text("知道了")
                 }
             },
         )
@@ -953,13 +1047,19 @@ private fun HostMenuItems(
 private fun BookRow(
     book: BookItem,
     cacheProgress: BookCacheProgress?,
+    localProgress: ReadingProgress?,
     onClick: () -> Unit,
 ) {
+    val lastRead = localProgress?.chapterTitle
+        ?.takeIf { it.isNotBlank() }
+        ?: book.lastReadChapter
+    val updateText = remember(book.updateDate) { relativeUpdateText(book.updateDate) }
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick)
-            .padding(vertical = 14.dp),
+            .padding(vertical = 12.dp),
     ) {
         Text(
             text = book.title,
@@ -968,43 +1068,74 @@ private fun BookRow(
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
         )
-        Spacer(Modifier.height(8.dp))
-        InfoLine(label = "最新章节", value = book.latestChapter)
-        InfoLine(label = "最后观看", value = book.lastReadChapter)
-        InfoLine(label = "更新日期", value = book.updateDate)
-        if (cacheProgress != null && cacheProgress.total > 0) {
-            val text = if (cacheProgress.isRunning) {
-                "缓存中 ${cacheProgress.cached}/${cacheProgress.total}"
-            } else {
-                "已缓存 ${cacheProgress.cached}/${cacheProgress.total}"
-            }
+        if (book.latestChapter.isNotBlank()) {
             Text(
-                text = text,
+                text = book.latestChapter,
                 modifier = Modifier.padding(top = 6.dp),
-                color = MaterialTheme.colorScheme.primary,
-                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontSize = 13.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
+        }
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (lastRead.isNotBlank()) {
+                CompactMetaChip(
+                    text = "读到 $lastRead",
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+            }
+            if (updateText.isNotBlank()) {
+                CompactMetaChip(text = updateText)
+            }
+            if (cacheProgress != null && cacheProgress.total > 0) {
+                CompactMetaChip(
+                    text = if (cacheProgress.isRunning) {
+                        "缓存中 ${cacheProgress.cached}/${cacheProgress.total}"
+                    } else {
+                        "已缓存 ${cacheProgress.cached}/${cacheProgress.total}"
+                    },
+                    active = cacheProgress.isRunning,
+                )
+            }
         }
     }
 }
 
 @Composable
-private fun InfoLine(label: String, value: String) {
-    Row(modifier = Modifier.fillMaxWidth()) {
-        Text(
-            text = label,
-            modifier = Modifier.padding(end = 10.dp),
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            fontSize = 13.sp,
-        )
-        Text(
-            text = value.ifBlank { "-" },
-            modifier = Modifier.weight(1f),
-            fontSize = 13.sp,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
+private fun CompactMetaChip(
+    text: String,
+    modifier: Modifier = Modifier,
+    active: Boolean = false,
+) {
+    val containerColor = if (active) {
+        MaterialTheme.colorScheme.primaryContainer
+    } else {
+        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.62f)
     }
+    val textColor = if (active) {
+        MaterialTheme.colorScheme.onPrimaryContainer
+    } else {
+        MaterialTheme.colorScheme.onSurfaceVariant
+    }
+
+    Text(
+        text = text,
+        modifier = modifier
+            .clip(RoundedCornerShape(6.dp))
+            .background(containerColor)
+            .padding(horizontal = 8.dp, vertical = 3.dp),
+        color = textColor,
+        fontSize = 12.sp,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+    )
 }
 
 @Composable
@@ -1052,6 +1183,7 @@ private fun ReaderScreen(
     onOpenUrl: (String) -> Unit,
     onRefresh: () -> Unit,
     onDarkModeChange: (Boolean) -> Unit,
+    cacheProgress: BookCacheProgress?,
     onCacheWholeBook: () -> Unit,
     onSystemBarsState: (ReaderSystemBarsState) -> Unit,
 ) {
@@ -1208,6 +1340,7 @@ private fun ReaderScreen(
                         chapterSheetVisible = true
                     },
                     onRefresh = onRefresh,
+                    cacheProgress = cacheProgress,
                     onCacheWholeBook = onCacheWholeBook,
                     onDarkModeChange = onDarkModeChange,
                     onPrevious = { chapter.previousUrl?.let(onOpenUrl) },
@@ -1361,6 +1494,7 @@ private fun ReaderControls(
     onBack: () -> Unit,
     onMenu: () -> Unit,
     onRefresh: () -> Unit,
+    cacheProgress: BookCacheProgress?,
     onCacheWholeBook: () -> Unit,
     onDarkModeChange: (Boolean) -> Unit,
     onPrevious: () -> Unit,
@@ -1418,8 +1552,15 @@ private fun ReaderControls(
                                 onRefresh()
                             },
                         )
+                        val cacheText = if (cacheProgress?.isRunning == true && cacheProgress.total > 0) {
+                            "正在缓存(${cacheProgress.cached}/${cacheProgress.total})"
+                        } else if (cacheProgress?.isRunning == true) {
+                            "正在缓存"
+                        } else {
+                            "缓存整本"
+                        }
                         DropdownMenuItem(
-                            text = { Text("缓存整本") },
+                            text = { Text(cacheText) },
                             onClick = {
                                 menuExpanded = false
                                 onCacheWholeBook()
@@ -1747,6 +1888,44 @@ private fun readerColors(darkMode: Boolean): ReaderColors {
             disabled = ReaderDisabled,
             disabledText = ReaderDisabledText,
         )
+    }
+}
+
+private fun relativeUpdateText(raw: String): String {
+    val text = raw.trim()
+    if (text.isBlank()) return ""
+    val date = parseUpdateDate(text) ?: return text
+    val days = Duration.between(date.atStartOfDay(), LocalDate.now().atStartOfDay()).toDays()
+    return when {
+        days <= 0L -> "今天更新"
+        days == 1L -> "一天前更新"
+        days < 7L -> "${days}天前更新"
+        days < 14L -> "一周前更新"
+        days < 30L -> "${days / 7}周前更新"
+        days < 365L -> "${days / 30}个月前更新"
+        else -> "${days / 365}年前更新"
+    }
+}
+
+private fun parseUpdateDate(text: String): LocalDate? {
+    val normalized = text.replace('/', '-')
+    val patterns = listOf(
+        "yyyy-MM-dd HH:mm",
+        "yyyy-MM-dd HH:mm:ss",
+        "yyyy-MM-dd",
+        "yyyy-M-d H:mm",
+        "yyyy-M-d H:mm:ss",
+        "yyyy-M-d",
+    )
+    return patterns.firstNotNullOfOrNull { pattern ->
+        val formatter = DateTimeFormatter.ofPattern(pattern)
+        runCatching {
+            if (pattern.contains("H")) {
+                LocalDateTime.parse(normalized, formatter).toLocalDate()
+            } else {
+                LocalDate.parse(normalized, formatter)
+            }
+        }.getOrNull()
     }
 }
 
