@@ -46,6 +46,10 @@ class LocalStore(context: Context) {
         )
     }
 
+    fun getBookshelfCacheHost(page: Int = 1): EsjHost? {
+        return EsjHost.entries.firstOrNull { host -> getBookshelf(host, page) != null }
+    }
+
     fun clearSession() {
         preferences.edit()
             .remove("cookies")

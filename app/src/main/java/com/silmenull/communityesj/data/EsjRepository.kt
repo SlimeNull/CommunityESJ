@@ -88,6 +88,15 @@ class EsjRepository(context: Context) {
         return cachedBookshelf(page) != null
     }
 
+    fun bookshelfCacheHost(page: Int = 1): EsjHost? {
+        return store.getBookshelf(selectedHost, page)?.let { selectedHost }
+            ?: store.getBookshelfCacheHost(page)
+    }
+
+    fun hasAnyCachedBookshelf(page: Int = 1): Boolean {
+        return bookshelfCacheHost(page) != null
+    }
+
     fun cacheProgressFor(detailUrl: String): BookCacheProgress? {
         val chapters = store.getChapters(detailUrl) ?: return null
         val total = chapters.size
