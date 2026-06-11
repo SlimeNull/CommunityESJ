@@ -70,6 +70,24 @@ enum class LoginSessionState {
     MISSING,
 }
 
+enum class ReaderThemePreset(
+    val displayName: String,
+    val dark: Boolean,
+) {
+    PAPER("纸页", false),
+    WARM("暖黄", false),
+    MINT("浅绿", false),
+    NIGHT("夜间", true),
+    COFFEE("咖啡", true),
+    SLATE("石墨", true);
+
+    companion object {
+        fun fromName(name: String?): ReaderThemePreset {
+            return entries.firstOrNull { it.name == name } ?: PAPER
+        }
+    }
+}
+
 enum class EsjHost(
     val displayName: String,
     val host: String,

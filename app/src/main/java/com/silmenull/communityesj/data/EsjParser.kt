@@ -121,9 +121,12 @@ object EsjParser {
 
     private fun parseContentBlocks(contentElement: Element): List<ReaderContentBlock> {
         val blocks = mutableListOf<ReaderContentBlock>()
+        val textBuffer = StringBuilder()
+
         contentElement.childNodes().forEach { node ->
-            appendContentNode(node, blocks)
+            appendContentNode(node, blocks, textBuffer)
         }
+        flushTextBuffer(textBuffer, blocks)
         if (blocks.isNotEmpty()) return blocks
 
         return contentElement.wholeText()
@@ -132,20 +135,28 @@ object EsjParser {
             .map { ReaderContentBlock.Text(it) }
     }
 
-    private fun appendContentNode(node: Node, blocks: MutableList<ReaderContentBlock>) {
+    private fun appendContentNode(
+        node: Node,
+        blocks: MutableList<ReaderContentBlock>,
+        textBuffer: StringBuilder,
+    ) {
         when (node) {
             is TextNode -> {
-                node.wholeText.cleanText()
-                    .takeIf(String::isNotBlank)
-                    ?.let { blocks.add(ReaderContentBlock.Text(it)) }
+                textBuffer.append(node.wholeText.replace(Regex("""[ \t]*\r?\n[ \t]*"""), " "))
             }
 
             is Element -> {
                 when (node.tagName().lowercase()) {
-                    "img" -> node.toImageBlock()?.let(blocks::add)
-                    "br" -> Unit
-                    "p" -> appendParagraph(node, blocks)
-                    else -> node.childNodes().forEach { appendContentNode(it, blocks) }
+                    "img" -> {
+                        flushTextBuffer(textBuffer, blocks)
+                        node.toImageBlock()?.let(blocks::add)
+                    }
+                    "br" -> textBuffer.append('\n')
+                    "p" -> {
+                        flushTextBuffer(textBuffer, blocks)
+                        appendParagraph(node, blocks)
+                    }
+                    else -> node.childNodes().forEach { appendContentNode(it, blocks, textBuffer) }
                 }
             }
         }
@@ -160,7 +171,23 @@ object EsjParser {
             return
         }
 
-        paragraph.childNodes().forEach { appendContentNode(it, blocks) }
+        val textBuffer = StringBuilder()
+        paragraph.childNodes().forEach { appendContentNode(it, blocks, textBuffer) }
+        flushTextBuffer(textBuffer, blocks)
+    }
+
+    private fun flushTextBuffer(
+        textBuffer: StringBuilder,
+        blocks: MutableList<ReaderContentBlock>,
+    ) {
+        if (textBuffer.isEmpty()) return
+        textBuffer.toString()
+            .replace("\r\n", "\n")
+            .replace('\r', '\n')
+            .split(Regex("""\n\s*\n+"""))
+            .mapNotNull { it.cleanText().takeIf(String::isNotBlank) }
+            .forEach { blocks.add(ReaderContentBlock.Text(it)) }
+        textBuffer.clear()
     }
 
     private fun Element.toImageBlock(): ReaderContentBlock.Image? {

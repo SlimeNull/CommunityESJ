@@ -47,6 +47,8 @@ class EsjRepository(context: Context) {
 
     fun progressFor(detailUrl: String): ReadingProgress? = store.getProgress(detailUrl)
 
+    fun hasLoggedInBefore(): Boolean = store.hasLoggedInBefore()
+
     fun saveProgress(progress: ReadingProgress) {
         store.saveProgress(progress)
     }
@@ -55,6 +57,18 @@ class EsjRepository(context: Context) {
 
     fun setReaderDarkMode(enabled: Boolean) {
         store.setReaderDarkMode(enabled)
+    }
+
+    fun readerThemePreset(): ReaderThemePreset = store.getReaderThemePreset()
+
+    fun setReaderThemePreset(preset: ReaderThemePreset) {
+        store.setReaderThemePreset(preset)
+    }
+
+    fun showLatestChapterOnBookshelf(): Boolean = store.showLatestChapterOnBookshelf()
+
+    fun setShowLatestChapterOnBookshelf(enabled: Boolean) {
+        store.setShowLatestChapterOnBookshelf(enabled)
     }
 
     fun logout() {
@@ -68,6 +82,10 @@ class EsjRepository(context: Context) {
 
     fun cachedBookshelf(page: Int = 1): BookshelfPage? {
         return store.getBookshelf(selectedHost, page)
+    }
+
+    fun hasCachedBookshelf(page: Int = 1): Boolean {
+        return cachedBookshelf(page) != null
     }
 
     fun cacheProgressFor(detailUrl: String): BookCacheProgress? {
@@ -112,7 +130,14 @@ class EsjRepository(context: Context) {
             success = status == 200,
             message = if (status == 200) "登录成功" else message.ifBlank { "登录失败，服务器返回：$loginResponse" },
         ).also { result ->
-            if (result.success) store.markLoggedIn()
+            if (result.success) {
+                val normalizedEmail = email.trim().lowercase()
+                val previousEmail = store.getLoginEmail()?.lowercase()
+                if (previousEmail != null && previousEmail != normalizedEmail) {
+                    store.clearUserCache()
+                }
+                store.markLoggedIn(normalizedEmail)
+            }
         }
     }
 

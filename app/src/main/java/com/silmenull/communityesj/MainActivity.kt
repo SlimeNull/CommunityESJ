@@ -28,8 +28,8 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
-import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
@@ -45,6 +45,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
@@ -65,6 +66,7 @@ import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.LightMode
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
@@ -78,12 +80,12 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -136,6 +138,7 @@ import com.silmenull.communityesj.data.LoginExpiredException
 import com.silmenull.communityesj.data.LoginSessionState
 import com.silmenull.communityesj.data.ReaderChapter
 import com.silmenull.communityesj.data.ReaderContentBlock
+import com.silmenull.communityesj.data.ReaderThemePreset
 import com.silmenull.communityesj.data.ReadingProgress
 import com.silmenull.communityesj.ui.theme.CommunityESJTheme
 import coil.compose.SubcomposeAsyncImage
@@ -201,6 +204,7 @@ class MainActivity : ComponentActivity() {
 private sealed interface Screen {
     data object Login : Screen
     data object Bookshelf : Screen
+    data object Settings : Screen
     data class Reader(val chapterUrl: String, val detailUrlHint: String? = null) : Screen
 }
 
@@ -216,10 +220,13 @@ private class AppState(
     var currentPage by mutableIntStateOf(1)
     var readerInitialProgress by mutableFloatStateOf(0f)
     var readerScrollProgress by mutableFloatStateOf(0f)
+    var readerThemePreset by mutableStateOf(repository.readerThemePreset())
     var readerDarkMode by mutableStateOf(repository.isReaderDarkMode())
     var bookshelfReloginAction by mutableStateOf(false)
     var bookshelfOfflineMessage by mutableStateOf<String?>(null)
+    var bookshelfRefreshing by mutableStateOf(false)
     var selectedHost by mutableStateOf(repository.currentHost())
+    var showLatestChapter by mutableStateOf(repository.showLatestChapterOnBookshelf())
     var cacheProgress by mutableStateOf<Map<String, BookCacheProgress>>(emptyMap())
     var localProgress by mutableStateOf<Map<String, ReadingProgress>>(emptyMap())
     var cacheJobs = mutableMapOf<String, Job>()
@@ -260,6 +267,15 @@ private fun EsjReaderApp() {
         appState.localProgress = readingProgress
     }
 
+    fun showCachedBookshelf(page: Int = 1): Boolean {
+        val cached = appState.repository.cachedBookshelf(page) ?: return false
+        appState.bookshelf = cached
+        appState.currentPage = cached.currentPage
+        syncBookshelfCacheProgress(cached)
+        appState.screen = Screen.Bookshelf
+        return true
+    }
+
     fun openWeb(url: String) {
         runCatching {
             context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
@@ -284,6 +300,7 @@ private fun EsjReaderApp() {
     fun loadBookshelf(page: Int = 1, goLoginOnFailure: Boolean = false) {
         scope.launch {
             appState.isLoading = true
+            appState.bookshelfRefreshing = false
             appState.message = null
             appState.bookshelfReloginAction = false
             appState.bookshelfOfflineMessage = null
@@ -325,6 +342,35 @@ private fun EsjReaderApp() {
                 }
             }
             appState.isLoading = false
+        }
+    }
+
+    fun refreshBookshelfInBackground(page: Int = appState.currentPage) {
+        scope.launch {
+            appState.bookshelfRefreshing = true
+            appState.message = null
+            appState.bookshelfOfflineMessage = null
+            appState.bookshelfReloginAction = false
+            runCatching {
+                appState.repository.loadBookshelf(page)
+            }.onSuccess { result ->
+                appState.bookshelf = result
+                appState.currentPage = result.currentPage
+                syncBookshelfCacheProgress(result)
+                appState.screen = Screen.Bookshelf
+            }.onFailure { error ->
+                val loginExpired = error is LoginExpiredException
+                if (loginExpired) {
+                    appState.repository.expireLogin()
+                }
+                appState.bookshelfReloginAction = true
+                appState.bookshelfOfflineMessage = if (loginExpired) {
+                    "登录凭证已过期，已进入离线模式"
+                } else {
+                    error.userMessage("加载书架失败，已显示本地缓存")
+                }
+            }
+            appState.bookshelfRefreshing = false
         }
     }
 
@@ -445,23 +491,23 @@ private fun EsjReaderApp() {
     }
 
     LaunchedEffect(Unit) {
-        when (appState.repository.loginSessionState()) {
+        val sessionState = appState.repository.loginSessionState()
+        if (appState.repository.hasLoggedInBefore()) {
+            val hasCache = showCachedBookshelf(1)
+            if (!hasCache) {
+                appState.screen = Screen.Bookshelf
+            }
+            refreshBookshelfInBackground(1)
+            return@LaunchedEffect
+        }
+
+        when (sessionState) {
             LoginSessionState.VALID -> loadBookshelf(goLoginOnFailure = true)
             LoginSessionState.EXPIRED -> {
-                appState.repository.cachedBookshelf(1)?.let { cached ->
-                    appState.bookshelf = cached
-                    appState.currentPage = cached.currentPage
-                    syncBookshelfCacheProgress(cached)
-                    appState.screen = Screen.Bookshelf
-                    appState.bookshelfReloginAction = true
-                    appState.bookshelfOfflineMessage = "登录凭证已过期，已进入离线模式"
-                    appState.message = null
-                } ?: run {
-                    appState.screen = Screen.Bookshelf
-                    appState.bookshelfReloginAction = true
-                    appState.bookshelfOfflineMessage = null
-                    appState.message = "登录凭证已过期,请重新登录"
-                }
+                appState.screen = Screen.Bookshelf
+                appState.bookshelfReloginAction = true
+                appState.bookshelfOfflineMessage = null
+                appState.message = "登录凭证已过期,请重新登录"
             }
             LoginSessionState.MISSING -> Unit
         }
@@ -486,7 +532,15 @@ private fun EsjReaderApp() {
                     isLoading = appState.isLoading,
                     message = appState.message,
                     currentHost = appState.selectedHost,
+                    showOfflineAction = appState.repository.hasLoggedInBefore() && appState.repository.hasCachedBookshelf(),
                     onHostChange = ::switchHost,
+                    onOffline = {
+                        if (showCachedBookshelf(1)) {
+                            appState.message = null
+                            appState.bookshelfReloginAction = true
+                            appState.bookshelfOfflineMessage = "当前正在查看本地缓存"
+                        }
+                    },
                     onLogin = { email, password ->
                         scope.launch {
                             appState.isLoading = true
@@ -514,6 +568,7 @@ private fun EsjReaderApp() {
                     isLoading = appState.isLoading,
                     message = appState.message,
                     offlineMessage = appState.bookshelfOfflineMessage,
+                    isRefreshing = appState.bookshelfRefreshing,
                     onRefresh = { loadBookshelf(appState.currentPage) },
                     onPage = { loadBookshelf(it) },
                     onOpenBook = ::openBook,
@@ -523,6 +578,11 @@ private fun EsjReaderApp() {
                     cacheProgress = appState.cacheProgress,
                     localProgress = appState.localProgress,
                     showReloginAction = appState.bookshelfReloginAction,
+                    showLatestChapter = appState.showLatestChapter,
+                    onOpenSettings = {
+                        appState.screen = Screen.Settings
+                        appState.message = null
+                    },
                     onRelogin = {
                         appState.repository.logout()
                         appState.screen = Screen.Login
@@ -540,6 +600,23 @@ private fun EsjReaderApp() {
                         appState.readerChapter = null
                         appState.bookshelf = BookshelfPage(emptyList(), 1, 1)
                         appState.localProgress = emptyMap()
+                    },
+                )
+
+                Screen.Settings -> SettingsScreen(
+                    readerThemePreset = appState.readerThemePreset,
+                    showLatestChapter = appState.showLatestChapter,
+                    onBack = {
+                        appState.screen = Screen.Bookshelf
+                    },
+                    onReaderThemePresetChange = { preset ->
+                        appState.readerThemePreset = preset
+                        appState.readerDarkMode = preset.dark
+                        appState.repository.setReaderThemePreset(preset)
+                    },
+                    onShowLatestChapterChange = { enabled ->
+                        appState.showLatestChapter = enabled
+                        appState.repository.setShowLatestChapterOnBookshelf(enabled)
                     },
                 )
 
@@ -574,9 +651,12 @@ private fun EsjReaderApp() {
                         )
                     },
                     onDarkModeChange = { enabled ->
-                        appState.readerDarkMode = enabled
-                        appState.repository.setReaderDarkMode(enabled)
+                        val preset = if (enabled) ReaderThemePreset.NIGHT else ReaderThemePreset.PAPER
+                        appState.readerThemePreset = preset
+                        appState.readerDarkMode = preset.dark
+                        appState.repository.setReaderThemePreset(preset)
                     },
+                    readerThemePreset = appState.readerThemePreset,
                     cacheProgress = (appState.readerChapter?.detailUrl ?: screen.detailUrlHint)
                         ?.let(appState.cacheProgress::get),
                     onCacheWholeBook = ::cacheWholeCurrentBook,
@@ -658,7 +738,9 @@ private fun LoginScreen(
     isLoading: Boolean,
     message: String?,
     currentHost: EsjHost,
+    showOfflineAction: Boolean,
     onHostChange: (EsjHost) -> Unit,
+    onOffline: () -> Unit,
     onLogin: (String, String) -> Unit,
 ) {
     var email by remember { mutableStateOf("") }
@@ -763,6 +845,17 @@ private fun LoginScreen(
                     Text("登录")
                 }
             }
+            if (showOfflineAction) {
+                Text(
+                    text = "离线模式",
+                    modifier = Modifier
+                        .align(Alignment.CenterHorizontally)
+                        .padding(top = 12.dp)
+                        .clickable(onClick = onOffline),
+                    color = MaterialTheme.colorScheme.primary,
+                    textDecoration = TextDecoration.Underline,
+                )
+            }
             if (message != null) {
                 Text(
                     text = message,
@@ -817,6 +910,7 @@ private fun BookshelfScreen(
     isLoading: Boolean,
     message: String?,
     offlineMessage: String?,
+    isRefreshing: Boolean,
     onRefresh: () -> Unit,
     onPage: (Int) -> Unit,
     onOpenBook: (BookItem) -> Unit,
@@ -826,6 +920,8 @@ private fun BookshelfScreen(
     cacheProgress: Map<String, BookCacheProgress>,
     localProgress: Map<String, ReadingProgress>,
     showReloginAction: Boolean,
+    showLatestChapter: Boolean,
+    onOpenSettings: () -> Unit,
     onRelogin: () -> Unit,
     onOpenGithub: () -> Unit,
     onLogout: () -> Unit,
@@ -843,7 +939,12 @@ private fun BookshelfScreen(
                     ) {
                         Text("书架")
                         Spacer(modifier = Modifier.width(8.dp))
-                        if (offlineMessage != null) {
+                        if (isRefreshing) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(18.dp),
+                                strokeWidth = 2.dp,
+                            )
+                        } else if (offlineMessage != null) {
                             IconButton(
                                 onClick = { offlineDialogVisible = true },
                                 modifier = Modifier
@@ -883,6 +984,13 @@ private fun BookshelfScreen(
                                 },
                             )
                             HorizontalDivider()
+                            DropdownMenuItem(
+                                text = { Text("设置") },
+                                onClick = {
+                                    menuExpanded = false
+                                    onOpenSettings()
+                                },
+                            )
                             DropdownMenuItem(
                                 text = { Text("退出登录") },
                                 onClick = {
@@ -943,6 +1051,7 @@ private fun BookshelfScreen(
                         book = book,
                         cacheProgress = book.detailUrl?.let(cacheProgress::get),
                         localProgress = book.detailUrl?.let(localProgress::get),
+                        showLatestChapter = showLatestChapter,
                         onClick = { onOpenBook(book) },
                     )
                     HorizontalDivider()
@@ -1052,6 +1161,7 @@ private fun BookRow(
     book: BookItem,
     cacheProgress: BookCacheProgress?,
     localProgress: ReadingProgress?,
+    showLatestChapter: Boolean,
     onClick: () -> Unit,
 ) {
     val lastRead = localProgress?.chapterTitle
@@ -1073,7 +1183,7 @@ private fun BookRow(
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
         )
-        if (book.latestChapter.isNotBlank()) {
+        if (showLatestChapter && book.latestChapter.isNotBlank()) {
             Text(
                 text = book.latestChapter,
                 modifier = Modifier.padding(top = 2.dp),
@@ -1143,6 +1253,151 @@ private fun CompactMetaChip(
     )
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SettingsScreen(
+    readerThemePreset: ReaderThemePreset,
+    showLatestChapter: Boolean,
+    onBack: () -> Unit,
+    onReaderThemePresetChange: (ReaderThemePreset) -> Unit,
+    onShowLatestChapterChange: (Boolean) -> Unit,
+) {
+    BackHandler(onBack = onBack)
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("设置") },
+                navigationIcon = {
+                    TextButton(onClick = onBack) {
+                        Text("书架")
+                    }
+                },
+            )
+        },
+        contentWindowInsets = WindowInsets.statusBars,
+    ) { innerPadding ->
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding),
+            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            item {
+                Text(
+                    text = "阅读配色",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
+            items(ReaderThemePreset.entries) { preset ->
+                ReaderThemePresetRow(
+                    preset = preset,
+                    selected = preset == readerThemePreset,
+                    onClick = { onReaderThemePresetChange(preset) },
+                )
+            }
+            item {
+                HorizontalDivider(modifier = Modifier.padding(vertical = 6.dp))
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable { onShowLatestChapterChange(!showLatestChapter) }
+                        .padding(vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "显示最新章节",
+                            style = MaterialTheme.typography.titleMedium,
+                        )
+                        Text(
+                            text = "关闭后书架列表会更紧凑",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontSize = 13.sp,
+                        )
+                    }
+                    Switch(
+                        checked = showLatestChapter,
+                        onCheckedChange = onShowLatestChapterChange,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ReaderThemePresetRow(
+    preset: ReaderThemePreset,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    val colors = readerColors(preset)
+    val background = if (selected) {
+        MaterialTheme.colorScheme.primaryContainer
+    } else {
+        Color.Transparent
+    }
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(background)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Row(
+            modifier = Modifier
+                .clip(RoundedCornerShape(6.dp))
+                .background(colors.page)
+                .padding(4.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            ColorSwatch(colors.text)
+            ColorSwatch(colors.mutedText)
+            ColorSwatch(colors.accent)
+        }
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .padding(start = 12.dp),
+        ) {
+            Text(
+                text = preset.displayName,
+                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+            )
+            Text(
+                text = if (preset.dark) "暗色模式" else "亮色模式",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontSize = 12.sp,
+            )
+        }
+        if (selected) {
+            Text(
+                text = "当前",
+                color = MaterialTheme.colorScheme.primary,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+        }
+    }
+}
+
+@Composable
+private fun ColorSwatch(color: Color) {
+    Box(
+        modifier = Modifier
+            .size(18.dp)
+            .clip(RoundedCornerShape(4.dp))
+            .background(color),
+    )
+}
+
 @Composable
 private fun PageBar(
     currentPage: Int,
@@ -1188,6 +1443,7 @@ private fun ReaderScreen(
     onOpenUrl: (String) -> Unit,
     onRefresh: () -> Unit,
     onDarkModeChange: (Boolean) -> Unit,
+    readerThemePreset: ReaderThemePreset,
     cacheProgress: BookCacheProgress?,
     onCacheWholeBook: () -> Unit,
     onSystemBarsState: (ReaderSystemBarsState) -> Unit,
@@ -1199,12 +1455,18 @@ private fun ReaderScreen(
     val listState = rememberLazyListState()
     val chapterListState = rememberLazyListState()
     val interactionSource = remember { MutableInteractionSource() }
-    val colors = readerColors(darkMode)
+    val colors = readerColors(readerThemePreset)
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val showStatusBar = controlsVisible || chapterSheetVisible || imageViewerUrl != null
 
-    BackHandler(onBack = onBack)
+    BackHandler {
+        if (chapterSheetVisible) {
+            chapterSheetVisible = false
+        } else {
+            onBack()
+        }
+    }
 
     LaunchedEffect(showStatusBar, darkMode) {
         onSystemBarsState(
@@ -1365,37 +1627,59 @@ private fun ReaderScreen(
         }
     }
 
-    if (chapterSheetVisible && chapter != null) {
-        ModalBottomSheet(onDismissRequest = { chapterSheetVisible = false }) {
-            Column(
+    AnimatedVisibility(
+        visible = chapterSheetVisible && chapter != null,
+        enter = fadeIn(tween(120)),
+        exit = fadeOut(tween(120)),
+    ) {
+        Box(modifier = Modifier.fillMaxSize()) {
+            Box(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .height(520.dp)
-                    .padding(horizontal = 16.dp),
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = if (darkMode) 0.42f else 0.24f))
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                    ) { chapterSheetVisible = false },
+            )
+            AnimatedVisibility(
+                visible = true,
+                enter = slideInHorizontally(animationSpec = tween(180)) { -it } + fadeIn(tween(180)),
+                exit = slideOutHorizontally(animationSpec = tween(160)) { -it } + fadeOut(tween(120)),
             ) {
-                Text(
-                    text = "目录",
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(bottom = 8.dp),
-                )
-                if (chapter.chapters.isEmpty()) {
-                    EmptyState("没有解析到目录", modifier = Modifier.fillMaxWidth().padding(top = 48.dp))
-                } else {
-                    LazyColumn(
-                        state = chapterListState,
-                    ) {
-                        itemsIndexed(chapter.chapters) { _, item ->
-                            ChapterListRow(
-                                item = item,
-                                selected = item.url == chapter.url,
-                                onClick = {
-                                    chapterSheetVisible = false
-                                    if (item.url != chapter.url) {
-                                        onOpenChapter(item)
-                                    }
-                                },
-                            )
+                Column(
+                    modifier = Modifier
+                        .fillMaxHeight()
+                        .fillMaxWidth(0.86f)
+                        .background(MaterialTheme.colorScheme.surface)
+                        .windowInsetsPadding(WindowInsets.statusBars)
+                        .windowInsetsPadding(WindowInsets.navigationBars)
+                        .padding(horizontal = 16.dp, vertical = 14.dp),
+                ) {
+                    Text(
+                        text = "目录",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(bottom = 8.dp),
+                    )
+                    if (chapter?.chapters.isNullOrEmpty()) {
+                        EmptyState("没有解析到目录", modifier = Modifier.fillMaxWidth().padding(top = 48.dp))
+                    } else {
+                        LazyColumn(
+                            state = chapterListState,
+                        ) {
+                            itemsIndexed(chapter!!.chapters) { _, item ->
+                                ChapterListRow(
+                                    item = item,
+                                    selected = item.url == chapter.url,
+                                    onClick = {
+                                        chapterSheetVisible = false
+                                        if (item.url != chapter.url) {
+                                            onOpenChapter(item)
+                                        }
+                                    },
+                                )
+                            }
                         }
                     }
                 }
@@ -1873,8 +2157,42 @@ private fun LazyListState.readingProgress(): Float {
 }
 
 private fun readerColors(darkMode: Boolean): ReaderColors {
-    return if (darkMode) {
-        ReaderColors(
+    return readerColors(if (darkMode) ReaderThemePreset.NIGHT else ReaderThemePreset.PAPER)
+}
+
+private fun readerColors(preset: ReaderThemePreset): ReaderColors {
+    return when (preset) {
+        ReaderThemePreset.PAPER -> ReaderColors(
+            page = ReaderPage,
+            text = ReaderText,
+            mutedText = ReaderMutedText,
+            bar = ReaderBar,
+            accent = ReaderAccent,
+            disabled = ReaderDisabled,
+            disabledText = ReaderDisabledText,
+        )
+
+        ReaderThemePreset.WARM -> ReaderColors(
+            page = Color(0xFFFFF4D8),
+            text = Color(0xFF2F2216),
+            mutedText = Color(0xFF7A664E),
+            bar = Color(0xF7FFF0C8),
+            accent = Color(0xFF6E4E20),
+            disabled = Color(0xFFE6D5B2),
+            disabledText = Color(0xFF806B4E),
+        )
+
+        ReaderThemePreset.MINT -> ReaderColors(
+            page = Color(0xFFF0F8EE),
+            text = Color(0xFF1F2A22),
+            mutedText = Color(0xFF5D6E61),
+            bar = Color(0xF7F4FBF0),
+            accent = Color(0xFF3E684D),
+            disabled = Color(0xFFD7E4D6),
+            disabledText = Color(0xFF657466),
+        )
+
+        ReaderThemePreset.NIGHT -> ReaderColors(
             page = ReaderDarkPage,
             text = ReaderDarkText,
             mutedText = ReaderDarkMutedText,
@@ -1883,15 +2201,25 @@ private fun readerColors(darkMode: Boolean): ReaderColors {
             disabled = ReaderDarkDisabled,
             disabledText = ReaderDarkDisabledText,
         )
-    } else {
-        ReaderColors(
-            page = ReaderPage,
-            text = ReaderText,
-            mutedText = ReaderMutedText,
-            bar = ReaderBar,
-            accent = ReaderAccent,
-            disabled = ReaderDisabled,
-            disabledText = ReaderDisabledText,
+
+        ReaderThemePreset.COFFEE -> ReaderColors(
+            page = Color(0xFF211A15),
+            text = Color(0xFFEBD8C2),
+            mutedText = Color(0xFFBBA28B),
+            bar = Color(0xF72B211B),
+            accent = Color(0xFFD3A56F),
+            disabled = Color(0xFF45372C),
+            disabledText = Color(0xFF9E8670),
+        )
+
+        ReaderThemePreset.SLATE -> ReaderColors(
+            page = Color(0xFF171A1F),
+            text = Color(0xFFE1E5EA),
+            mutedText = Color(0xFFA8B1BD),
+            bar = Color(0xF720242B),
+            accent = Color(0xFF9DB7E8),
+            disabled = Color(0xFF343A44),
+            disabledText = Color(0xFF8C96A5),
         )
     }
 }
