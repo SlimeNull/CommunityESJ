@@ -49,7 +49,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBars
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
@@ -86,6 +85,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Surface
@@ -122,14 +122,16 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalAutofill
 import androidx.compose.ui.platform.LocalAutofillTree
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextIndent
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.silmenull.communityesj.data.BookItem
@@ -142,6 +144,8 @@ import com.silmenull.communityesj.data.LoginExpiredException
 import com.silmenull.communityesj.data.LoginSessionState
 import com.silmenull.communityesj.data.ReaderChapter
 import com.silmenull.communityesj.data.ReaderContentBlock
+import com.silmenull.communityesj.data.ReaderFontFamily
+import com.silmenull.communityesj.data.ReaderLayoutSettings
 import com.silmenull.communityesj.data.ReaderThemePreset
 import com.silmenull.communityesj.data.ReadingProgress
 import com.silmenull.communityesj.ui.theme.CommunityESJTheme
@@ -226,6 +230,7 @@ private class AppState(
     var readerScrollProgress by mutableFloatStateOf(0f)
     var readerLightThemePreset by mutableStateOf(repository.readerLightThemePreset())
     var readerDarkThemePreset by mutableStateOf(repository.readerDarkThemePreset())
+    var readerLayoutSettings by mutableStateOf(repository.readerLayoutSettings())
     var readerDarkMode by mutableStateOf(repository.isReaderDarkMode())
     var bookshelfReloginAction by mutableStateOf(false)
     var bookshelfOfflineMessage by mutableStateOf<String?>(null)
@@ -638,6 +643,7 @@ private fun EsjReaderApp() {
                 Screen.Settings -> SettingsScreen(
                     readerLightThemePreset = appState.readerLightThemePreset,
                     readerDarkThemePreset = appState.readerDarkThemePreset,
+                    readerLayoutSettings = appState.readerLayoutSettings,
                     showLatestChapter = appState.showLatestChapter,
                     onBack = {
                         appState.screen = Screen.Bookshelf
@@ -649,6 +655,10 @@ private fun EsjReaderApp() {
                     onReaderDarkThemePresetChange = { preset ->
                         appState.readerDarkThemePreset = preset
                         appState.repository.setReaderDarkThemePreset(preset)
+                    },
+                    onReaderLayoutSettingsChange = { settings ->
+                        appState.readerLayoutSettings = settings
+                        appState.repository.setReaderLayoutSettings(settings)
                     },
                     onShowLatestChapterChange = { enabled ->
                         appState.showLatestChapter = enabled
@@ -693,6 +703,7 @@ private fun EsjReaderApp() {
                     } else {
                         appState.readerLightThemePreset
                     },
+                    readerLayoutSettings = appState.readerLayoutSettings,
                     cacheProgress = (appState.readerChapter?.detailUrl ?: screen.detailUrlHint)
                         ?.let(appState.cacheProgress::get),
                     onCacheWholeBook = ::cacheWholeCurrentBook,
@@ -1292,10 +1303,12 @@ private fun CompactMetaChip(
 private fun SettingsScreen(
     readerLightThemePreset: ReaderThemePreset,
     readerDarkThemePreset: ReaderThemePreset,
+    readerLayoutSettings: ReaderLayoutSettings,
     showLatestChapter: Boolean,
     onBack: () -> Unit,
     onReaderLightThemePresetChange: (ReaderThemePreset) -> Unit,
     onReaderDarkThemePresetChange: (ReaderThemePreset) -> Unit,
+    onReaderLayoutSettingsChange: (ReaderLayoutSettings) -> Unit,
     onShowLatestChapterChange: (Boolean) -> Unit,
 ) {
     BackHandler(onBack = onBack)
@@ -1354,6 +1367,84 @@ private fun SettingsScreen(
                     preset = preset,
                     selected = preset == readerDarkThemePreset,
                     onClick = { onReaderDarkThemePresetChange(preset) },
+                )
+            }
+            item {
+                HorizontalDivider(modifier = Modifier.padding(vertical = 6.dp))
+                Text(
+                    text = "阅读布局",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
+            item {
+                Text(
+                    text = "字体",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 13.sp,
+                )
+            }
+            items(ReaderFontFamily.entries) { family ->
+                ReaderFontRow(
+                    family = family,
+                    selected = family == readerLayoutSettings.fontFamily,
+                    onClick = {
+                        onReaderLayoutSettingsChange(readerLayoutSettings.copy(fontFamily = family))
+                    },
+                )
+            }
+            item {
+                ReaderSettingSlider(
+                    title = "字体大小",
+                    valueText = "${readerLayoutSettings.fontSizeSp.roundToInt()} sp",
+                    value = readerLayoutSettings.fontSizeSp,
+                    valueRange = 14f..30f,
+                    steps = 15,
+                    onValueChange = { value ->
+                        onReaderLayoutSettingsChange(readerLayoutSettings.copy(fontSizeSp = value.roundToInt().toFloat()))
+                    },
+                )
+            }
+            item {
+                ReaderSettingSlider(
+                    title = "段落间距",
+                    valueText = "${readerLayoutSettings.paragraphSpacingDp.roundToInt()} dp",
+                    value = readerLayoutSettings.paragraphSpacingDp,
+                    valueRange = 0f..36f,
+                    steps = 17,
+                    onValueChange = { value ->
+                        onReaderLayoutSettingsChange(
+                            readerLayoutSettings.copy(paragraphSpacingDp = (value / 2f).roundToInt() * 2f),
+                        )
+                    },
+                )
+            }
+            item {
+                ReaderSettingSlider(
+                    title = "首行缩进",
+                    valueText = "${readerLayoutSettings.firstLineIndentEm.formatOneDecimal()} em",
+                    value = readerLayoutSettings.firstLineIndentEm,
+                    valueRange = 0f..4f,
+                    steps = 7,
+                    onValueChange = { value ->
+                        onReaderLayoutSettingsChange(
+                            readerLayoutSettings.copy(firstLineIndentEm = (value * 2f).roundToInt() / 2f),
+                        )
+                    },
+                )
+            }
+            item {
+                ReaderSettingSlider(
+                    title = "页面左右边距",
+                    valueText = "${readerLayoutSettings.horizontalPaddingDp.roundToInt()} dp",
+                    value = readerLayoutSettings.horizontalPaddingDp,
+                    valueRange = 12f..48f,
+                    steps = 17,
+                    onValueChange = { value ->
+                        onReaderLayoutSettingsChange(
+                            readerLayoutSettings.copy(horizontalPaddingDp = (value / 2f).roundToInt() * 2f),
+                        )
+                    },
                 )
             }
             item {
@@ -1447,6 +1538,92 @@ private fun ReaderThemePresetRow(
 }
 
 @Composable
+private fun ReaderFontRow(
+    family: ReaderFontFamily,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    val background = if (selected) {
+        MaterialTheme.colorScheme.primaryContainer
+    } else {
+        Color.Transparent
+    }
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(background)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = "字",
+            modifier = Modifier
+                .clip(RoundedCornerShape(6.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant)
+                .padding(horizontal = 9.dp, vertical = 4.dp),
+            fontFamily = family.toFontFamily(),
+            fontWeight = FontWeight.SemiBold,
+        )
+        Text(
+            text = family.displayName,
+            modifier = Modifier
+                .weight(1f)
+                .padding(start = 12.dp),
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+        )
+        if (selected) {
+            Text(
+                text = "当前",
+                color = MaterialTheme.colorScheme.primary,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+        }
+    }
+}
+
+@Composable
+private fun ReaderSettingSlider(
+    title: String,
+    valueText: String,
+    value: Float,
+    valueRange: ClosedFloatingPointRange<Float>,
+    steps: Int,
+    onValueChange: (Float) -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 2.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = title,
+                modifier = Modifier.weight(1f),
+                style = MaterialTheme.typography.titleSmall,
+            )
+            Text(
+                text = valueText,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontSize = 12.sp,
+            )
+        }
+        Slider(
+            value = value.coerceIn(valueRange.start, valueRange.endInclusive),
+            onValueChange = onValueChange,
+            valueRange = valueRange,
+            steps = steps,
+        )
+    }
+}
+
+@Composable
 private fun ColorSwatch(color: Color) {
     Box(
         modifier = Modifier
@@ -1501,6 +1678,7 @@ private fun ReaderScreen(
     onRefresh: () -> Unit,
     onDarkModeChange: (Boolean) -> Unit,
     readerThemePreset: ReaderThemePreset,
+    readerLayoutSettings: ReaderLayoutSettings,
     cacheProgress: BookCacheProgress?,
     onCacheWholeBook: () -> Unit,
     onRefreshChapters: () -> Unit,
@@ -1514,6 +1692,12 @@ private fun ReaderScreen(
     val chapterListState = rememberLazyListState()
     val interactionSource = remember { MutableInteractionSource() }
     val colors = readerColors(readerThemePreset)
+    val readerFontSize = readerLayoutSettings.fontSizeSp.sp
+    val readerLineHeight = (readerLayoutSettings.fontSizeSp * 1.68f).sp
+    val readerTextStyle = TextStyle(
+        fontFamily = readerLayoutSettings.fontFamily.toFontFamily(),
+        textIndent = TextIndent(firstLine = (readerLayoutSettings.fontSizeSp * readerLayoutSettings.firstLineIndentEm).sp),
+    )
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val showStatusBar = controlsVisible || chapterSheetVisible || imageViewerUrl != null
@@ -1598,7 +1782,12 @@ private fun ReaderScreen(
                 LazyColumn(
                     state = listState,
                     modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(start = 22.dp, top = 44.dp, end = 30.dp, bottom = 44.dp),
+                    contentPadding = PaddingValues(
+                        start = readerLayoutSettings.horizontalPaddingDp.dp,
+                        top = 44.dp,
+                        end = (readerLayoutSettings.horizontalPaddingDp + 8f).dp,
+                        bottom = 44.dp,
+                    ),
                 ) {
                     item {
                         Text(
@@ -1621,10 +1810,11 @@ private fun ReaderScreen(
                         when (block) {
                             is ReaderContentBlock.Text -> Text(
                                 text = block.text,
-                                modifier = Modifier.padding(bottom = 14.dp),
+                                modifier = Modifier.padding(bottom = readerLayoutSettings.paragraphSpacingDp.dp),
                                 color = colors.text,
-                                fontSize = 19.sp,
-                                lineHeight = 32.sp,
+                                fontSize = readerFontSize,
+                                lineHeight = readerLineHeight,
+                                style = readerTextStyle,
                             )
 
                             is ReaderContentBlock.Image -> ReaderImage(
@@ -2047,11 +2237,10 @@ private fun LazyListScrollbar(
     val layoutInfo = state.layoutInfo
     val totalItems = layoutInfo.totalItemsCount
     val visibleItems = layoutInfo.visibleItemsInfo
-    if (totalItems <= 0 || visibleItems.isEmpty()) return
+    if (totalItems <= 1 || visibleItems.isEmpty()) return
+    if (!state.canScrollBackward && !state.canScrollForward) return
 
-    val firstVisibleIndex = visibleItems.first().index
-    val visibleCount = visibleItems.size.coerceAtLeast(1)
-    if (totalItems <= visibleCount) return
+    val progress = state.readingProgress()
 
     BoxWithConstraints(
         modifier = modifier
@@ -2062,27 +2251,17 @@ private fun LazyListScrollbar(
     ) {
         val density = LocalDensity.current
         val maxHeightPx = with(density) { maxHeight.toPx() }.coerceAtLeast(1f)
-        val viewportSize = (layoutInfo.viewportEndOffset - layoutInfo.viewportStartOffset).coerceAtLeast(1)
-        val averageItemSize = visibleItems
-            .map { it.size }
-            .average()
-            .takeIf { it.isFinite() && it > 0.0 }
-            ?.toFloat()
-            ?: viewportSize.toFloat()
-        val estimatedContentSize = (averageItemSize * totalItems).coerceAtLeast(viewportSize.toFloat())
-        val estimatedScrollOffset = (firstVisibleIndex * averageItemSize + state.firstVisibleItemScrollOffset)
-            .coerceIn(0f, (estimatedContentSize - viewportSize).coerceAtLeast(0f))
-        val scrollableSize = (estimatedContentSize - viewportSize).coerceAtLeast(1f)
-        val thumbHeightPx = (viewportSize / estimatedContentSize * maxHeightPx)
-            .coerceIn(with(density) { 28.dp.toPx() }, maxHeightPx)
-        val thumbOffsetPx = (estimatedScrollOffset / scrollableSize * (maxHeightPx - thumbHeightPx))
+        val thumbHeightPx = with(density) { 48.dp.toPx() }.coerceAtMost(maxHeightPx)
+        val thumbOffsetPx = (progress * (maxHeightPx - thumbHeightPx))
             .coerceIn(0f, maxHeightPx - thumbHeightPx)
 
         Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(with(density) { thumbHeightPx.toDp() })
-                .offset(y = with(density) { thumbOffsetPx.toDp() })
+                .graphicsLayer {
+                    translationY = thumbOffsetPx
+                }
                 .clip(RoundedCornerShape(999.dp))
                 .background(thumbColor),
         )
@@ -2242,9 +2421,32 @@ private fun LazyListState.readingProgress(): Float {
     val info = layoutInfo
     val total = info.totalItemsCount
     if (total <= 1) return 0f
-    val viewport = (info.viewportEndOffset - info.viewportStartOffset).coerceAtLeast(1)
-    val itemProgress = firstVisibleItemScrollOffset.toFloat() / viewport.toFloat()
+    if (!canScrollBackward && !canScrollForward) return 0f
+    if (!canScrollForward) return 1f
+
+    val firstVisibleItem = info.visibleItemsInfo.firstOrNull() ?: return 0f
+    val itemProgress = firstVisibleItemScrollOffset.toFloat() / firstVisibleItem.size.coerceAtLeast(1).toFloat()
     return ((firstVisibleItemIndex + itemProgress) / (total - 1).toFloat()).coerceIn(0f, 1f)
+}
+
+private fun ReaderFontFamily.toFontFamily(): FontFamily? {
+    return when (this) {
+        ReaderFontFamily.SYSTEM -> null
+        ReaderFontFamily.SERIF -> FontFamily.Serif
+        ReaderFontFamily.SANS_SERIF -> FontFamily.SansSerif
+        ReaderFontFamily.MONOSPACE -> FontFamily.Monospace
+    }
+}
+
+private fun Float.formatOneDecimal(): String {
+    val tenths = (this * 10f).roundToInt()
+    val whole = tenths / 10
+    val decimal = abs(tenths % 10)
+    return if (decimal == 0) {
+        whole.toString()
+    } else {
+        "$whole.$decimal"
+    }
 }
 
 private fun readerColors(darkMode: Boolean): ReaderColors {

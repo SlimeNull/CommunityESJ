@@ -163,6 +163,26 @@ class LocalStore(context: Context) {
             .apply()
     }
 
+    fun getReaderLayoutSettings(): ReaderLayoutSettings {
+        return ReaderLayoutSettings(
+            fontFamily = ReaderFontFamily.fromName(preferences.getString("reader_font_family", null)),
+            fontSizeSp = preferences.getFloat("reader_font_size_sp", 19f).coerceIn(14f, 30f),
+            paragraphSpacingDp = preferences.getFloat("reader_paragraph_spacing_dp", 14f).coerceIn(0f, 36f),
+            firstLineIndentEm = preferences.getFloat("reader_first_line_indent_em", 2f).coerceIn(0f, 4f),
+            horizontalPaddingDp = preferences.getFloat("reader_horizontal_padding_dp", 22f).coerceIn(12f, 48f),
+        )
+    }
+
+    fun setReaderLayoutSettings(settings: ReaderLayoutSettings) {
+        preferences.edit()
+            .putString("reader_font_family", settings.fontFamily.name)
+            .putFloat("reader_font_size_sp", settings.fontSizeSp.coerceIn(14f, 30f))
+            .putFloat("reader_paragraph_spacing_dp", settings.paragraphSpacingDp.coerceIn(0f, 36f))
+            .putFloat("reader_first_line_indent_em", settings.firstLineIndentEm.coerceIn(0f, 4f))
+            .putFloat("reader_horizontal_padding_dp", settings.horizontalPaddingDp.coerceIn(12f, 48f))
+            .apply()
+    }
+
     fun showLatestChapterOnBookshelf(): Boolean {
         return preferences.getBoolean("show_latest_chapter", true)
     }
