@@ -267,7 +267,13 @@ private fun EsjReaderApp() {
         appState.localProgress = readingProgress
     }
 
-    fun showCachedBookshelf(page: Int = 1): Boolean {
+    fun showCachedBookshelf(page: Int = 1, allowCachedHostSwitch: Boolean = false): Boolean {
+        if (allowCachedHostSwitch && appState.repository.cachedBookshelf(page) == null) {
+            appState.repository.bookshelfCacheHost(page)?.let { cachedHost ->
+                appState.repository.switchHost(cachedHost)
+                appState.selectedHost = appState.repository.currentHost()
+            }
+        }
         val cached = appState.repository.cachedBookshelf(page) ?: return false
         appState.bookshelf = cached
         appState.currentPage = cached.currentPage
@@ -577,10 +583,10 @@ private fun EsjReaderApp() {
                     isLoading = appState.isLoading,
                     message = appState.message,
                     currentHost = appState.selectedHost,
-                    showOfflineAction = appState.repository.hasLoggedInBefore() && appState.repository.hasCachedBookshelf(),
+                    showOfflineAction = appState.repository.hasAnyCachedBookshelf(),
                     onHostChange = ::switchHost,
                     onOffline = {
-                        if (showCachedBookshelf(1)) {
+                        if (showCachedBookshelf(1, allowCachedHostSwitch = true)) {
                             appState.message = null
                             appState.bookshelfReloginAction = true
                             appState.bookshelfOfflineMessage = "当前正在查看本地缓存"

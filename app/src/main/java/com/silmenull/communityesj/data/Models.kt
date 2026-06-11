@@ -100,7 +100,7 @@ enum class EsjHost(
 
     companion object {
         fun fromHost(host: String?): EsjHost {
-            return entries.firstOrNull { it.host == host } ?: MAGIC
+            return entries.firstOrNull { it.host == host } ?: DIRECT
         }
     }
 }
