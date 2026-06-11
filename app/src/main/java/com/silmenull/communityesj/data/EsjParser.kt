@@ -121,12 +121,12 @@ object EsjParser {
 
     private fun parseContentBlocks(contentElement: Element): List<ReaderContentBlock> {
         val blocks = mutableListOf<ReaderContentBlock>()
-        val textState = TextBlockState()
+        val state = ContentParseState(blocks)
 
         contentElement.childNodes().forEach { node ->
-            appendContentNode(node, blocks, textState)
+            collectContentNode(node, state)
         }
-        textState.flush(blocks)
+        state.flushText()
         if (blocks.isNotEmpty()) return blocks
 
         return contentElement.wholeText()
@@ -135,45 +135,34 @@ object EsjParser {
             .map { ReaderContentBlock.Text(it) }
     }
 
-    private fun appendContentNode(
-        node: Node,
-        blocks: MutableList<ReaderContentBlock>,
-        textState: TextBlockState,
-    ) {
+    private fun collectContentNode(node: Node, state: ContentParseState) {
         when (node) {
-            is TextNode -> {
-                textState.appendText(node.wholeText)
-            }
+            is TextNode -> state.appendText(node.wholeText)
 
             is Element -> {
                 when (node.tagName().lowercase()) {
                     "img" -> {
-                        textState.flush(blocks)
-                        node.toImageBlock()?.let(blocks::add)
+                        state.flushText()
+                        node.toImageBlock()?.let(state::addBlock)
                     }
-                    "br" -> textState.appendBreak(blocks)
-                    "p" -> {
-                        textState.flush(blocks)
-                        appendParagraph(node, blocks)
-                    }
-                    else -> node.childNodes().forEach { appendContentNode(it, blocks, textState) }
+                    "br" -> state.appendBreak()
+                    "p" -> collectParagraph(node, state)
+                    else -> node.childNodes().forEach { collectContentNode(it, state) }
                 }
             }
         }
     }
 
-    private fun appendParagraph(paragraph: Element, blocks: MutableList<ReaderContentBlock>) {
-        val images = paragraph.select("img[src]")
-        if (images.isEmpty()) {
-            paragraph.wholeText().cleanText()
+    private fun collectParagraph(paragraph: Element, state: ContentParseState) {
+        if (paragraph.childNodeSize() == 0) {
+            paragraph.ownText().cleanMultilineText()
                 .takeIf(String::isNotBlank)
-                ?.let { blocks.add(ReaderContentBlock.Text(it)) }
+                ?.let { state.addBlock(ReaderContentBlock.Text(it)) }
             return
         }
 
-        val textState = TextBlockState()
-        paragraph.childNodes().forEach { appendContentNode(it, blocks, textState) }
-        textState.flush(blocks)
+        paragraph.childNodes().forEach { collectContentNode(it, state) }
+        state.flushText()
     }
 
     private fun Element.toImageBlock(): ReaderContentBlock.Image? {
@@ -185,7 +174,9 @@ object EsjParser {
         )
     }
 
-    private class TextBlockState {
+    private class ContentParseState(
+        private val blocks: MutableList<ReaderContentBlock>,
+    ) {
         private val buffer = StringBuilder()
         private var pendingBreaks = 0
 
@@ -202,20 +193,24 @@ object EsjParser {
             buffer.append(normalized)
         }
 
-        fun appendBreak(blocks: MutableList<ReaderContentBlock>) {
+        fun appendBreak() {
             pendingBreaks += 1
             if (pendingBreaks >= 2) {
-                flush(blocks)
+                flushText()
             }
         }
 
-        fun flush(blocks: MutableList<ReaderContentBlock>) {
+        fun flushText() {
             buffer.toString()
                 .cleanMultilineText()
                 .takeIf(String::isNotBlank)
-                ?.let { blocks.add(ReaderContentBlock.Text(it)) }
+                ?.let { addBlock(ReaderContentBlock.Text(it)) }
             buffer.clear()
             pendingBreaks = 0
+        }
+
+        fun addBlock(block: ReaderContentBlock) {
+            blocks.add(block)
         }
     }
 
