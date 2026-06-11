@@ -53,6 +53,6 @@ class EsjParserTest {
         val chapter = EsjParser.parseReader(html, "https://www.esjzone.cc/forum/1/1.html")
         val paragraphs = chapter.contentBlocks.mapNotNull { (it as? ReaderContentBlock.Text)?.text }
 
-        assertEquals(listOf("第一段", "第二段 仍然第二段", "第三段"), paragraphs)
+        assertEquals(listOf("第一段", "第二段\n仍然第二段", "第三段"), paragraphs)
     }
 }

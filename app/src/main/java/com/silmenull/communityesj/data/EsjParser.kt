@@ -121,12 +121,12 @@ object EsjParser {
 
     private fun parseContentBlocks(contentElement: Element): List<ReaderContentBlock> {
         val blocks = mutableListOf<ReaderContentBlock>()
-        val textBuffer = StringBuilder()
+        val textState = TextBlockState()
 
         contentElement.childNodes().forEach { node ->
-            appendContentNode(node, blocks, textBuffer)
+            appendContentNode(node, blocks, textState)
         }
-        flushTextBuffer(textBuffer, blocks)
+        textState.flush(blocks)
         if (blocks.isNotEmpty()) return blocks
 
         return contentElement.wholeText()
@@ -138,25 +138,25 @@ object EsjParser {
     private fun appendContentNode(
         node: Node,
         blocks: MutableList<ReaderContentBlock>,
-        textBuffer: StringBuilder,
+        textState: TextBlockState,
     ) {
         when (node) {
             is TextNode -> {
-                textBuffer.append(node.wholeText.replace(Regex("""[ \t]*\r?\n[ \t]*"""), " "))
+                textState.appendText(node.wholeText)
             }
 
             is Element -> {
                 when (node.tagName().lowercase()) {
                     "img" -> {
-                        flushTextBuffer(textBuffer, blocks)
+                        textState.flush(blocks)
                         node.toImageBlock()?.let(blocks::add)
                     }
-                    "br" -> textBuffer.append('\n')
+                    "br" -> textState.appendBreak(blocks)
                     "p" -> {
-                        flushTextBuffer(textBuffer, blocks)
+                        textState.flush(blocks)
                         appendParagraph(node, blocks)
                     }
-                    else -> node.childNodes().forEach { appendContentNode(it, blocks, textBuffer) }
+                    else -> node.childNodes().forEach { appendContentNode(it, blocks, textState) }
                 }
             }
         }
@@ -171,23 +171,9 @@ object EsjParser {
             return
         }
 
-        val textBuffer = StringBuilder()
-        paragraph.childNodes().forEach { appendContentNode(it, blocks, textBuffer) }
-        flushTextBuffer(textBuffer, blocks)
-    }
-
-    private fun flushTextBuffer(
-        textBuffer: StringBuilder,
-        blocks: MutableList<ReaderContentBlock>,
-    ) {
-        if (textBuffer.isEmpty()) return
-        textBuffer.toString()
-            .replace("\r\n", "\n")
-            .replace('\r', '\n')
-            .split(Regex("""\n\s*\n+"""))
-            .mapNotNull { it.cleanText().takeIf(String::isNotBlank) }
-            .forEach { blocks.add(ReaderContentBlock.Text(it)) }
-        textBuffer.clear()
+        val textState = TextBlockState()
+        paragraph.childNodes().forEach { appendContentNode(it, blocks, textState) }
+        textState.flush(blocks)
     }
 
     private fun Element.toImageBlock(): ReaderContentBlock.Image? {
@@ -197,6 +183,40 @@ object EsjParser {
             url = src,
             alt = attr("alt").cleanText(),
         )
+    }
+
+    private class TextBlockState {
+        private val buffer = StringBuilder()
+        private var pendingBreaks = 0
+
+        fun appendText(text: String) {
+            val normalized = text
+                .replace("\r\n", "\n")
+                .replace('\r', '\n')
+                .replace(Regex("""[ \t]*\n[ \t]*"""), " ")
+            if (normalized.isBlank()) return
+            if (pendingBreaks == 1 && buffer.isNotEmpty() && buffer.last() != '\n') {
+                buffer.append('\n')
+            }
+            pendingBreaks = 0
+            buffer.append(normalized)
+        }
+
+        fun appendBreak(blocks: MutableList<ReaderContentBlock>) {
+            pendingBreaks += 1
+            if (pendingBreaks >= 2) {
+                flush(blocks)
+            }
+        }
+
+        fun flush(blocks: MutableList<ReaderContentBlock>) {
+            buffer.toString()
+                .cleanMultilineText()
+                .takeIf(String::isNotBlank)
+                ?.let { blocks.add(ReaderContentBlock.Text(it)) }
+            buffer.clear()
+            pendingBreaks = 0
+        }
     }
 
     private fun findByLabel(item: Element, vararg labels: String): Element? {
@@ -227,6 +247,19 @@ object EsjParser {
         return this
             ?.replace('\u00A0', ' ')
             ?.replace(Regex("""[ \t\r\n]+"""), " ")
+            ?.trim()
+            .orEmpty()
+    }
+
+    private fun String?.cleanMultilineText(): String {
+        return this
+            ?.replace('\u00A0', ' ')
+            ?.replace("\r\n", "\n")
+            ?.replace('\r', '\n')
+            ?.split('\n')
+            ?.joinToString("\n") { line ->
+                line.replace(Regex("""[ \t]+"""), " ").trim()
+            }
             ?.trim()
             .orEmpty()
     }
