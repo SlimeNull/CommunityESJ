@@ -46,6 +46,12 @@ data class LoginResult(
     val message: String,
 )
 
+data class RememberedLogin(
+    val enabled: Boolean,
+    val email: String,
+    val password: String,
+)
+
 data class ReadingProgress(
     val detailUrl: String,
     val bookTitle: String,
@@ -98,9 +104,11 @@ enum class ReaderThemePreset(
     val displayName: String,
     val dark: Boolean,
 ) {
+    PURE_WHITE("纯白", false),
     PAPER("纸页", false),
     WARM("暖黄", false),
     MINT("浅绿", false),
+    PURE_BLACK("纯黑", true),
     NIGHT("夜间", true),
     COFFEE("咖啡", true),
     SLATE("石墨", true);

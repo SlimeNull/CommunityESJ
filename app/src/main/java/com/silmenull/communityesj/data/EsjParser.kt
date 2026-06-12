@@ -7,8 +7,12 @@ import org.jsoup.nodes.Node
 import org.jsoup.nodes.TextNode
 
 object EsjParser {
-    private val loginRedirectRegex = Regex(
-        pattern = """\b(?:window\.)?location(?:\.href)?\s*=\s*['"][^'"]*login[^'"]*['"]""",
+    private val scriptRedirectRegex = Regex(
+        pattern = """\b(?:(?:window|document|top|self|parent)\.)?location(?:\.(?:href|replace|assign))?\s*(?:=|\()\s*['"][^'"]*/my/login(?:[?#][^'"]*)?['"]""",
+        options = setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL),
+    )
+    private val metaRefreshRegex = Regex(
+        pattern = """<meta[^>]+http-equiv\s*=\s*['"]?refresh['"]?[^>]+content\s*=\s*['"][^'"]+['"]""",
         options = setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL),
     )
 
@@ -33,8 +37,9 @@ object EsjParser {
         )
     }
 
-    fun containsLoginRedirect(html: String): Boolean {
-        return loginRedirectRegex.containsMatchIn(html)
+    fun containsRedirectInstruction(html: String): Boolean {
+        return scriptRedirectRegex.containsMatchIn(html) ||
+            metaRefreshRegex.containsMatchIn(html)
     }
 
     fun parseChapters(html: String, baseUrl: String): List<ChapterLink> {

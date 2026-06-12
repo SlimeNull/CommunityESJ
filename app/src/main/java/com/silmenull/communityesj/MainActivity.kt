@@ -4,6 +4,8 @@ import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
 import android.content.Intent
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.graphics.Bitmap
 import android.graphics.drawable.BitmapDrawable
 import android.provider.MediaStore
@@ -11,6 +13,7 @@ import android.net.Uri
 import android.os.Bundle
 import android.content.ContentValues
 import android.os.Environment
+import android.view.View
 import android.view.Window
 import android.view.autofill.AutofillManager
 import android.widget.Toast
@@ -34,6 +37,8 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
@@ -54,6 +59,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -67,7 +73,6 @@ import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.LightMode
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
@@ -89,6 +94,7 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -122,6 +128,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalAutofill
 import androidx.compose.ui.platform.LocalAutofillTree
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
@@ -147,6 +154,7 @@ import com.silmenull.communityesj.data.ReaderContentBlock
 import com.silmenull.communityesj.data.ReaderFontFamily
 import com.silmenull.communityesj.data.ReaderLayoutSettings
 import com.silmenull.communityesj.data.ReaderThemePreset
+import com.silmenull.communityesj.data.RememberedLogin
 import com.silmenull.communityesj.data.ReadingProgress
 import com.silmenull.communityesj.ui.theme.CommunityESJTheme
 import coil.compose.SubcomposeAsyncImage
@@ -228,9 +236,11 @@ private class AppState(
     var currentPage by mutableIntStateOf(1)
     var readerInitialProgress by mutableFloatStateOf(0f)
     var readerScrollProgress by mutableFloatStateOf(0f)
+    var readerControlsVisible by mutableStateOf(false)
     var readerLightThemePreset by mutableStateOf(repository.readerLightThemePreset())
     var readerDarkThemePreset by mutableStateOf(repository.readerDarkThemePreset())
     var readerLayoutSettings by mutableStateOf(repository.readerLayoutSettings())
+    var rememberedLogin by mutableStateOf(repository.rememberedLogin())
     var readerDarkMode by mutableStateOf(repository.isReaderDarkMode())
     var bookshelfReloginAction by mutableStateOf(false)
     var bookshelfOfflineMessage by mutableStateOf<String?>(null)
@@ -300,6 +310,12 @@ private fun EsjReaderApp() {
         runCatching {
             context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
         }.onFailure { error -> showFeedback(error.userMessage("无法打开网页")) }
+    }
+
+    fun copyText(label: String, text: String) {
+        val clipboard = context.getSystemService(ClipboardManager::class.java)
+        clipboard?.setPrimaryClip(ClipData.newPlainText(label, text))
+        showFeedback("已复制")
     }
 
     fun switchHost(host: EsjHost) {
@@ -451,6 +467,9 @@ private fun EsjReaderApp() {
                 if (error is CancellationException) {
                     return@onFailure
                 }
+                if (error is LoginExpiredException) {
+                    appState.repository.expireLogin()
+                }
                 val total = chapter.chapters.size
                 updateCacheProgress(
                     BookCacheProgress(
@@ -490,7 +509,12 @@ private fun EsjReaderApp() {
                 scope.launch {
                     appState.repository.prefetchNextChapters(chapter.url, chapter.chapters)
                 }
-            }.onFailure { error -> showFeedback(error.userMessage("加载章节失败")) }
+            }.onFailure { error ->
+                if (error is LoginExpiredException) {
+                    appState.repository.expireLogin()
+                }
+                showFeedback(error.userMessage("加载章节失败"))
+            }
             appState.isLoading = false
         }
     }
@@ -508,7 +532,12 @@ private fun EsjReaderApp() {
                 appState.repository.refreshChapters(detailUrl)
             }.onSuccess { chapters ->
                 appState.readerChapter = appState.readerChapter?.copy(chapters = chapters)
-            }.onFailure { error -> showFeedback(error.userMessage("刷新目录失败")) }
+            }.onFailure { error ->
+                if (error is LoginExpiredException) {
+                    appState.repository.expireLogin()
+                }
+                showFeedback(error.userMessage("刷新目录失败"))
+            }
             appState.isLoading = false
         }
     }
@@ -537,6 +566,9 @@ private fun EsjReaderApp() {
                 appState.isLoading = false
                 openReader(chapter.url, detailUrl, restoredProgress)
             }.onFailure { error ->
+                if (error is LoginExpiredException) {
+                    appState.repository.expireLogin()
+                }
                 showFeedback(error.userMessage("加载目录失败"))
                 appState.isLoading = false
             }
@@ -569,6 +601,7 @@ private fun EsjReaderApp() {
     LaunchedEffect(appState.screen) {
         if (appState.screen !is Screen.Reader) {
             readerBarsState = null
+            appState.readerControlsVisible = false
         }
     }
 
@@ -584,6 +617,7 @@ private fun EsjReaderApp() {
                 Screen.Login -> LoginScreen(
                     isLoading = appState.isLoading,
                     currentHost = appState.selectedHost,
+                    rememberedLogin = appState.rememberedLogin,
                     showOfflineAction = appState.repository.hasAnyCachedBookshelf(),
                     onHostChange = ::switchHost,
                     onOffline = {
@@ -602,12 +636,26 @@ private fun EsjReaderApp() {
                             }.onSuccess { result ->
                                 showFeedback(result.message)
                                 if (result.success) {
+                                    appState.repository.setRememberedLogin(
+                                        enabled = appState.rememberedLogin.enabled,
+                                        email = email,
+                                        password = password,
+                                    )
+                                    appState.rememberedLogin = appState.repository.rememberedLogin()
                                     autofillManager?.commit()
                                     loadBookshelf()
                                 }
                             }.onFailure { error -> showFeedback(error.userMessage("登录失败")) }
                             appState.isLoading = false
                         }
+                    },
+                    onRememberChange = { remembered ->
+                        appState.rememberedLogin = remembered
+                        appState.repository.setRememberedLogin(
+                            enabled = remembered.enabled,
+                            email = remembered.email,
+                            password = remembered.password,
+                        )
                     },
                 )
 
@@ -625,6 +673,15 @@ private fun EsjReaderApp() {
                     cacheProgress = appState.cacheProgress,
                     localProgress = appState.localProgress,
                     showLatestChapter = appState.showLatestChapter,
+                    onCopyBookTitle = { book -> copyText("书名", book.title) },
+                    onCopyBookLink = { book ->
+                        val link = book.detailUrl ?: book.lastReadChapterUrl ?: book.latestChapterUrl
+                        if (link.isNullOrBlank()) {
+                            showFeedback("这本书缺少链接")
+                        } else {
+                            copyText("书籍链接", link)
+                        }
+                    },
                     onOpenSettings = {
                         appState.screen = Screen.Settings
                     },
@@ -712,6 +769,10 @@ private fun EsjReaderApp() {
                         appState.readerLightThemePreset
                     },
                     readerLayoutSettings = appState.readerLayoutSettings,
+                    controlsVisible = appState.readerControlsVisible,
+                    onControlsVisibleChange = { visible ->
+                        appState.readerControlsVisible = visible
+                    },
                     cacheProgress = (appState.readerChapter?.detailUrl ?: screen.detailUrlHint)
                         ?.let(appState.cacheProgress::get),
                     onCacheWholeBook = ::cacheWholeCurrentBook,
@@ -807,14 +868,25 @@ private fun applySystemBars(
 private fun LoginScreen(
     isLoading: Boolean,
     currentHost: EsjHost,
+    rememberedLogin: RememberedLogin,
     showOfflineAction: Boolean,
     onHostChange: (EsjHost) -> Unit,
     onOffline: () -> Unit,
     onLogin: (String, String) -> Unit,
+    onRememberChange: (RememberedLogin) -> Unit,
 ) {
-    var email by remember { mutableStateOf("") }
-    var password by remember { mutableStateOf("") }
+    var email by remember { mutableStateOf(rememberedLogin.email) }
+    var password by remember { mutableStateOf(rememberedLogin.password) }
     val canSubmit = !isLoading && email.isNotBlank() && password.isNotBlank()
+    val view = LocalView.current
+
+    DisposableEffect(view) {
+        val previous = view.importantForAutofill
+        view.importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_YES
+        onDispose {
+            view.importantForAutofill = previous
+        }
+    }
 
     Scaffold(
         modifier = Modifier.fillMaxSize(),
@@ -858,7 +930,12 @@ private fun LoginScreen(
                 Spacer(Modifier.height(28.dp))
                 OutlinedTextField(
                     value = email,
-                    onValueChange = { email = it },
+                    onValueChange = {
+                        email = it
+                        if (rememberedLogin.enabled) {
+                            onRememberChange(rememberedLogin.copy(email = it))
+                        }
+                    },
                     modifier = Modifier
                         .fillMaxWidth()
                         .autofill(
@@ -876,7 +953,12 @@ private fun LoginScreen(
                 Spacer(Modifier.height(12.dp))
                 OutlinedTextField(
                     value = password,
-                    onValueChange = { password = it },
+                    onValueChange = {
+                        password = it
+                        if (rememberedLogin.enabled) {
+                            onRememberChange(rememberedLogin.copy(password = it))
+                        }
+                    },
                     modifier = Modifier
                         .fillMaxWidth()
                         .autofill(
@@ -899,7 +981,39 @@ private fun LoginScreen(
                         },
                     ),
                 )
-                Spacer(Modifier.height(20.dp))
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 10.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable(enabled = !isLoading) {
+                            onRememberChange(
+                                rememberedLogin.copy(
+                                    enabled = !rememberedLogin.enabled,
+                                    email = email,
+                                    password = password,
+                                ),
+                            )
+                        }
+                        .padding(vertical = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Checkbox(
+                        checked = rememberedLogin.enabled,
+                        onCheckedChange = { checked ->
+                            onRememberChange(
+                                RememberedLogin(
+                                    enabled = checked,
+                                    email = email,
+                                    password = password,
+                                ),
+                            )
+                        },
+                        enabled = !isLoading,
+                    )
+                    Text("记住我")
+                }
+                Spacer(Modifier.height(14.dp))
                 Button(
                     onClick = { onLogin(email.trim(), password) },
                     modifier = Modifier.fillMaxWidth(),
@@ -984,6 +1098,8 @@ private fun BookshelfScreen(
     cacheProgress: Map<String, BookCacheProgress>,
     localProgress: Map<String, ReadingProgress>,
     showLatestChapter: Boolean,
+    onCopyBookTitle: (BookItem) -> Unit,
+    onCopyBookLink: (BookItem) -> Unit,
     onOpenSettings: () -> Unit,
     onOpenGithub: () -> Unit,
     onLogout: () -> Unit,
@@ -1106,6 +1222,8 @@ private fun BookshelfScreen(
                         localProgress = book.detailUrl?.let(localProgress::get),
                         showLatestChapter = showLatestChapter,
                         onClick = { onOpenBook(book) },
+                        onCopyTitle = { onCopyBookTitle(book) },
+                        onCopyLink = { onCopyBookLink(book) },
                     )
                     HorizontalDivider()
                 }
@@ -1209,6 +1327,7 @@ private fun HostMenuItems(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun BookRow(
     book: BookItem,
@@ -1216,62 +1335,89 @@ private fun BookRow(
     localProgress: ReadingProgress?,
     showLatestChapter: Boolean,
     onClick: () -> Unit,
+    onCopyTitle: () -> Unit,
+    onCopyLink: () -> Unit,
 ) {
+    var menuExpanded by remember { mutableStateOf(false) }
     val lastRead = localProgress?.chapterTitle
         ?.takeIf { it.isNotBlank() }
         ?: book.lastReadChapter
     val updateText = remember(book.updateDate) { relativeUpdateText(book.updateDate) }
 
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(vertical = 12.dp),
-    ) {
-        Text(
-            text = book.title,
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.SemiBold,
-            fontSize = 18.sp,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-        )
-        if (showLatestChapter && book.latestChapter.isNotBlank()) {
-            Text(
-                text = book.latestChapter,
-                modifier = Modifier.padding(top = 2.dp),
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                fontSize = 14.sp,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
-        Row(
+    Box {
+        Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(top = 4.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
+                .combinedClickable(
+                    onClick = onClick,
+                    onLongClick = { menuExpanded = true },
+                )
+                .padding(vertical = 12.dp),
         ) {
-            if (lastRead.isNotBlank()) {
-                CompactMetaChip(
-                    text = "读到 $lastRead",
-                    modifier = Modifier.weight(1f, fill = false),
+            Text(
+                text = book.title,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 18.sp,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (showLatestChapter && book.latestChapter.isNotBlank()) {
+                Text(
+                    text = book.latestChapter,
+                    modifier = Modifier.padding(top = 2.dp),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 14.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
-            if (updateText.isNotBlank()) {
-                CompactMetaChip(text = updateText)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                if (lastRead.isNotBlank()) {
+                    CompactMetaChip(
+                        text = "读到 $lastRead",
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                }
+                if (updateText.isNotBlank()) {
+                    CompactMetaChip(text = updateText)
+                }
+                if (cacheProgress != null && cacheProgress.total > 0) {
+                    CompactMetaChip(
+                        text = if (cacheProgress.isRunning) {
+                            "缓存中 ${cacheProgress.cached}/${cacheProgress.total}"
+                        } else {
+                            "已缓存 ${cacheProgress.cached}/${cacheProgress.total}"
+                        },
+                        active = cacheProgress.isRunning,
+                    )
+                }
             }
-            if (cacheProgress != null && cacheProgress.total > 0) {
-                CompactMetaChip(
-                    text = if (cacheProgress.isRunning) {
-                        "缓存中 ${cacheProgress.cached}/${cacheProgress.total}"
-                    } else {
-                        "已缓存 ${cacheProgress.cached}/${cacheProgress.total}"
-                    },
-                    active = cacheProgress.isRunning,
-                )
-            }
+        }
+        DropdownMenu(
+            expanded = menuExpanded,
+            onDismissRequest = { menuExpanded = false },
+        ) {
+            DropdownMenuItem(
+                text = { Text("复制书名") },
+                onClick = {
+                    menuExpanded = false
+                    onCopyTitle()
+                },
+            )
+            DropdownMenuItem(
+                text = { Text("复制书链接") },
+                onClick = {
+                    menuExpanded = false
+                    onCopyLink()
+                },
+            )
         }
     }
 }
@@ -1356,11 +1502,11 @@ private fun SettingsScreen(
                     fontSize = 13.sp,
                 )
             }
-            items(ReaderThemePreset.entries.filterNot { it.dark }) { preset ->
+            item {
                 ReaderThemePresetRow(
-                    preset = preset,
-                    selected = preset == readerLightThemePreset,
-                    onClick = { onReaderLightThemePresetChange(preset) },
+                    presets = ReaderThemePreset.entries.filterNot { it.dark },
+                    selectedPreset = readerLightThemePreset,
+                    onClick = onReaderLightThemePresetChange,
                 )
             }
             item {
@@ -1371,11 +1517,11 @@ private fun SettingsScreen(
                     fontSize = 13.sp,
                 )
             }
-            items(ReaderThemePreset.entries.filter { it.dark }) { preset ->
+            item {
                 ReaderThemePresetRow(
-                    preset = preset,
-                    selected = preset == readerDarkThemePreset,
-                    onClick = { onReaderDarkThemePresetChange(preset) },
+                    presets = ReaderThemePreset.entries.filter { it.dark },
+                    selectedPreset = readerDarkThemePreset,
+                    onClick = onReaderDarkThemePresetChange,
                 )
             }
             item {
@@ -1513,6 +1659,28 @@ private fun SettingsScreen(
 
 @Composable
 private fun ReaderThemePresetRow(
+    presets: List<ReaderThemePreset>,
+    selectedPreset: ReaderThemePreset,
+    onClick: (ReaderThemePreset) -> Unit,
+) {
+    LazyRow(
+        modifier = Modifier
+            .fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        contentPadding = PaddingValues(vertical = 2.dp),
+    ) {
+        items(presets) { preset ->
+            ReaderThemePresetCard(
+                preset = preset,
+                selected = preset == selectedPreset,
+                onClick = { onClick(preset) },
+            )
+        }
+    }
+}
+
+@Composable
+private fun ReaderThemePresetCard(
     preset: ReaderThemePreset,
     selected: Boolean,
     onClick: () -> Unit,
@@ -1521,49 +1689,60 @@ private fun ReaderThemePresetRow(
     val background = if (selected) {
         MaterialTheme.colorScheme.primaryContainer
     } else {
+        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
+    }
+    val borderColor = if (selected) {
+        MaterialTheme.colorScheme.primary
+    } else {
         Color.Transparent
     }
 
-    Row(
+    Column(
         modifier = Modifier
-            .fillMaxWidth()
+            .width(112.dp)
             .clip(RoundedCornerShape(8.dp))
             .background(background)
             .clickable(onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
+            .padding(8.dp),
     ) {
-        Row(
+        Box(
             modifier = Modifier
+                .fillMaxWidth()
+                .height(42.dp)
                 .clip(RoundedCornerShape(6.dp))
-                .background(colors.page)
-                .padding(4.dp),
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                .background(colors.page),
         ) {
-            ColorSwatch(colors.text)
-            ColorSwatch(colors.mutedText)
-            ColorSwatch(colors.accent)
+            Row(
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .padding(5.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                ColorSwatch(colors.text)
+                ColorSwatch(colors.mutedText)
+                ColorSwatch(colors.accent)
+            }
+            if (selected) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(borderColor.copy(alpha = 0.12f)),
+                )
+            }
         }
-        Column(
-            modifier = Modifier
-                .weight(1f)
-                .padding(start = 12.dp),
-        ) {
-            Text(
-                text = preset.displayName,
-                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-            )
-            Text(
-                text = if (preset.dark) "暗色模式" else "亮色模式",
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                fontSize = 12.sp,
-            )
-        }
+        Text(
+            text = preset.displayName,
+            modifier = Modifier.padding(top = 6.dp),
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+            fontSize = 13.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
         if (selected) {
             Text(
                 text = "当前",
                 color = MaterialTheme.colorScheme.primary,
-                fontSize = 12.sp,
+                fontSize = 11.sp,
                 fontWeight = FontWeight.SemiBold,
             )
         }
@@ -1712,13 +1891,14 @@ private fun ReaderScreen(
     onDarkModeChange: (Boolean) -> Unit,
     readerThemePreset: ReaderThemePreset,
     readerLayoutSettings: ReaderLayoutSettings,
+    controlsVisible: Boolean,
+    onControlsVisibleChange: (Boolean) -> Unit,
     cacheProgress: BookCacheProgress?,
     onCacheWholeBook: () -> Unit,
     onRefreshChapters: () -> Unit,
     onSystemBarsState: (ReaderSystemBarsState) -> Unit,
     onFeedback: (String, Boolean) -> Unit,
 ) {
-    var controlsVisible by remember { mutableStateOf(false) }
     var chapterSheetVisible by remember { mutableStateOf(false) }
     var imageViewerUrl by remember { mutableStateOf<String?>(null) }
     val listState = rememberLazyListState()
@@ -1786,6 +1966,14 @@ private fun ReaderScreen(
         }
     }
 
+    LaunchedEffect(Unit) {
+        snapshotFlow { listState.isScrollInProgress }.collect { scrolling ->
+            if (scrolling && controlsVisible) {
+                onControlsVisibleChange(false)
+            }
+        }
+    }
+
     LaunchedEffect(chapterSheetVisible, chapter?.url, chapter?.chapters) {
         val current = chapter ?: return@LaunchedEffect
         if (!chapterSheetVisible) return@LaunchedEffect
@@ -1798,11 +1986,7 @@ private fun ReaderScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(colors.page)
-            .clickable(
-                interactionSource = interactionSource,
-                indication = null,
-            ) { controlsVisible = !controlsVisible },
+            .background(colors.page),
     ) {
         when {
             isLoading && chapter == null -> LoadingOverlay()
@@ -1814,7 +1998,12 @@ private fun ReaderScreen(
             else -> Box(modifier = Modifier.fillMaxSize()) {
                 LazyColumn(
                     state = listState,
-                    modifier = Modifier.fillMaxSize(),
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .clickable(
+                            interactionSource = interactionSource,
+                            indication = null,
+                        ) { onControlsVisibleChange(!controlsVisible) },
                     contentPadding = PaddingValues(
                         start = readerLayoutSettings.horizontalPaddingDp.dp,
                         top = 44.dp,
@@ -1891,7 +2080,6 @@ private fun ReaderScreen(
                     hasNext = chapter.nextUrl != null,
                     onBack = onBack,
                     onMenu = {
-                        controlsVisible = false
                         chapterSheetVisible = true
                     },
                     onRefresh = onRefresh,
@@ -1915,25 +2103,27 @@ private fun ReaderScreen(
         }
     }
 
-    AnimatedVisibility(
-        visible = chapterSheetVisible && chapter != null,
-        enter = fadeIn(tween(120)),
-        exit = fadeOut(tween(120)),
-    ) {
+    if (chapter != null) {
         Box(modifier = Modifier.fillMaxSize()) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(Color.Black.copy(alpha = if (darkMode) 0.42f else 0.24f))
-                    .clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null,
-                    ) { chapterSheetVisible = false },
-            )
             AnimatedVisibility(
-                visible = true,
-                enter = slideInHorizontally(animationSpec = tween(180)) { -it } + fadeIn(tween(180)),
-                exit = slideOutHorizontally(animationSpec = tween(160)) { -it } + fadeOut(tween(120)),
+                visible = chapterSheetVisible,
+                enter = fadeIn(tween(120)),
+                exit = fadeOut(tween(120)),
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color.Black.copy(alpha = if (darkMode) 0.42f else 0.24f))
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null,
+                        ) { chapterSheetVisible = false },
+                )
+            }
+            AnimatedVisibility(
+                visible = chapterSheetVisible,
+                enter = slideInHorizontally(animationSpec = tween(180)) { -it },
+                exit = slideOutHorizontally(animationSpec = tween(180)) { -it },
             ) {
                 Column(
                     modifier = Modifier
@@ -2488,6 +2678,16 @@ private fun readerColors(darkMode: Boolean): ReaderColors {
 
 private fun readerColors(preset: ReaderThemePreset): ReaderColors {
     return when (preset) {
+        ReaderThemePreset.PURE_WHITE -> ReaderColors(
+            page = Color.White,
+            text = Color.Black,
+            mutedText = Color(0xFF555555),
+            bar = Color(0xF7FFFFFF),
+            accent = Color.Black,
+            disabled = Color(0xFFE3E3E3),
+            disabledText = Color(0xFF707070),
+        )
+
         ReaderThemePreset.PAPER -> ReaderColors(
             page = ReaderPage,
             text = ReaderText,
@@ -2516,6 +2716,16 @@ private fun readerColors(preset: ReaderThemePreset): ReaderColors {
             accent = Color(0xFF3E684D),
             disabled = Color(0xFFD7E4D6),
             disabledText = Color(0xFF657466),
+        )
+
+        ReaderThemePreset.PURE_BLACK -> ReaderColors(
+            page = Color.Black,
+            text = Color.White,
+            mutedText = Color(0xFFB8B8B8),
+            bar = Color(0xF7000000),
+            accent = Color.White,
+            disabled = Color(0xFF2B2B2B),
+            disabledText = Color(0xFF8E8E8E),
         )
 
         ReaderThemePreset.NIGHT -> ReaderColors(
@@ -2605,6 +2815,9 @@ private fun screenTransition(initial: Screen, target: Screen): ContentTransform 
 }
 
 private fun Throwable.userMessage(prefix: String): String {
+    if (this is LoginExpiredException) {
+        return "登录凭证已失效，请重新登录"
+    }
     val detail = message?.takeIf { it.isNotBlank() } ?: javaClass.simpleName
     return "$prefix：$detail"
 }

@@ -90,6 +90,28 @@ class LocalStore(context: Context) {
             ?.takeIf { it.isNotBlank() }
     }
 
+    fun getRememberedLogin(): RememberedLogin {
+        val enabled = preferences.getBoolean("remember_login_enabled", false)
+        return RememberedLogin(
+            enabled = enabled,
+            email = if (enabled) preferences.getString("remember_login_email", null).orEmpty() else "",
+            password = if (enabled) preferences.getString("remember_login_password", null).orEmpty() else "",
+        )
+    }
+
+    fun setRememberedLogin(enabled: Boolean, email: String, password: String) {
+        preferences.edit().apply {
+            putBoolean("remember_login_enabled", enabled)
+            if (enabled) {
+                putString("remember_login_email", email)
+                putString("remember_login_password", password)
+            } else {
+                remove("remember_login_email")
+                remove("remember_login_password")
+            }
+        }.apply()
+    }
+
     fun getHost(): EsjHost {
         return EsjHost.fromHost(preferences.getString("selected_host", null))
     }

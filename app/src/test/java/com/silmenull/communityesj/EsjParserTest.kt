@@ -18,7 +18,20 @@ class EsjParserTest {
             </html>
         """.trimIndent()
 
-        assertTrue(EsjParser.containsLoginRedirect(html))
+        assertTrue(EsjParser.containsRedirectInstruction(html))
+    }
+
+    @Test
+    fun containsLoginRedirectIgnoresScriptNavigationToOtherPath() {
+        val html = """
+            <html>
+              <body>
+                <script>window.location.href = '/detail/123.html';</script>
+              </body>
+            </html>
+        """.trimIndent()
+
+        assertFalse(EsjParser.containsRedirectInstruction(html))
     }
 
     @Test
@@ -31,7 +44,7 @@ class EsjParserTest {
             </html>
         """.trimIndent()
 
-        assertFalse(EsjParser.containsLoginRedirect(html))
+        assertFalse(EsjParser.containsRedirectInstruction(html))
     }
 
     @Test

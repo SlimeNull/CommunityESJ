@@ -49,6 +49,12 @@ class EsjRepository(context: Context) {
 
     fun hasLoggedInBefore(): Boolean = store.hasLoggedInBefore()
 
+    fun rememberedLogin(): RememberedLogin = store.getRememberedLogin()
+
+    fun setRememberedLogin(enabled: Boolean, email: String, password: String) {
+        store.setRememberedLogin(enabled, email, password)
+    }
+
     fun saveProgress(progress: ReadingProgress) {
         store.saveProgress(progress)
     }
@@ -139,7 +145,7 @@ class EsjRepository(context: Context) {
         val tokenRequest = baseRequest(siteUrl("/my/login"))
             .post(tokenBody)
             .build()
-        val tokenResponse = executeText(tokenRequest)
+        val tokenResponse = executeText(tokenRequest, checkSession = false)
         EsjParser.parseAuthToken(tokenResponse)
             ?: throw IOException("登录令牌响应格式不正确")
 
@@ -151,7 +157,7 @@ class EsjRepository(context: Context) {
         val loginRequest = baseRequest(siteUrl("/inc/mem_login.php"))
             .post(loginBody)
             .build()
-        val loginResponse = executeText(loginRequest)
+        val loginResponse = executeText(loginRequest, checkSession = false)
         val json = runCatching { JSONObject(loginResponse) }.getOrNull()
         val status = json?.optInt("status") ?: 0
         val message = json?.optString("msg").orEmpty()
@@ -178,9 +184,6 @@ class EsjRepository(context: Context) {
             siteUrl("/my/favorite/$page.html")
         }
         val html = executeText(baseRequest(url).get().build())
-        if (EsjParser.containsLoginRedirect(html)) {
-            throw LoginExpiredException()
-        }
         EsjParser.parseBookshelf(html, page, selectedHost.baseUrl)
             .also { store.saveBookshelf(it) }
     }
@@ -260,9 +263,6 @@ class EsjRepository(context: Context) {
 
         val currentUrl = currentHostUrl(url)
         val readerHtml = executeText(baseRequest(currentUrl).get().build())
-        if (EsjParser.containsLoginRedirect(readerHtml)) {
-            throw LoginExpiredException()
-        }
         val parsedReader = EsjParser.parseReader(readerHtml, currentUrl)
         val detailUrl = currentHostUrlOrNull(detailUrlHint) ?: parsedReader.detailUrl
         val chapters = detailUrl
@@ -282,9 +282,6 @@ class EsjRepository(context: Context) {
         }
         val currentDetailUrl = currentHostUrl(detailUrl)
         val html = executeText(baseRequest(currentDetailUrl).get().build())
-        if (EsjParser.containsLoginRedirect(html)) {
-            throw LoginExpiredException()
-        }
         val chapters = EsjParser.parseChapters(html, currentDetailUrl)
         if (chapters.isNotEmpty()) {
             store.saveChapters(currentDetailUrl, chapters)
@@ -417,11 +414,20 @@ class EsjRepository(context: Context) {
         return "${selectedHost.baseUrl}$path"
     }
 
-    private fun executeText(request: Request): String {
+    private fun executeText(request: Request, checkSession: Boolean = true): String {
         client.newCall(request).execute().use { response ->
             val body = response.body?.string().orEmpty()
             if (!response.isSuccessful) {
                 throw IOException("HTTP ${response.code}: ${body.take(200)}")
+            }
+            if (checkSession && response.request.url.encodedPath.contains("login", ignoreCase = true)) {
+                throw LoginExpiredException()
+            }
+            if (checkSession && response.priorResponse != null) {
+                throw LoginExpiredException()
+            }
+            if (checkSession && EsjParser.containsRedirectInstruction(body)) {
+                throw LoginExpiredException()
             }
             return body
         }
