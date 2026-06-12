@@ -68,6 +68,7 @@ data class ReaderLayoutSettings(
     val firstLineIndentEm: Float = 2f,
     val horizontalPaddingDp: Float = 22f,
     val shortcutPageTurnPercent: Float = 0.8f,
+    val shortcutAnimationMillis: Int = 300,
 )
 
 data class EpubExport(

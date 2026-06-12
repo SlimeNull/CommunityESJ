@@ -117,6 +117,7 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.setValue
@@ -1854,6 +1855,22 @@ private fun SettingsScreen(
                 )
             }
             item {
+                ReaderSettingSlider(
+                    title = "缓动时长",
+                    valueText = "${readerLayoutSettings.shortcutAnimationMillis} ms",
+                    value = readerLayoutSettings.shortcutAnimationMillis.toFloat(),
+                    valueRange = 100f..1000f,
+                    steps = 17,
+                    onValueChange = { value ->
+                        onReaderLayoutSettingsChange(
+                            readerLayoutSettings.copy(
+                                shortcutAnimationMillis = ((value / 50f).roundToInt() * 50).coerceIn(100, 1000),
+                            ),
+                        )
+                    },
+                )
+            }
+            item {
                 HorizontalDivider(modifier = Modifier.padding(vertical = 6.dp))
                 Row(
                     modifier = Modifier
@@ -2155,6 +2172,8 @@ private fun ReaderScreen(
     val showStatusBar = controlsVisible || chapterSheetVisible || imageViewerUrl != null
     val shortcutEnabled = chapter != null && !controlsVisible && !chapterSheetVisible && imageViewerUrl == null
     val shortcutPageTurnPercent = readerLayoutSettings.shortcutPageTurnPercent.coerceIn(0.1f, 1f)
+    val shortcutAnimationMillis = readerLayoutSettings.shortcutAnimationMillis.coerceIn(100, 1000)
+    val latestControlsVisible by rememberUpdatedState(controlsVisible)
 
     BackHandler {
         if (chapterSheetVisible) {
@@ -2209,7 +2228,7 @@ private fun ReaderScreen(
 
     LaunchedEffect(Unit) {
         snapshotFlow { listState.isScrollInProgress }.collect { scrolling ->
-            if (scrolling && controlsVisible) {
+            if (scrolling && latestControlsVisible) {
                 onControlsVisibleChange(false)
             }
         }
@@ -2224,7 +2243,7 @@ private fun ReaderScreen(
         }
     }
 
-    DisposableEffect(shortcutEnabled, shortcutPageTurnPercent, listState, scope) {
+    DisposableEffect(shortcutEnabled, shortcutPageTurnPercent, shortcutAnimationMillis, listState, scope) {
         if (shortcutEnabled) {
             onReaderShortcutHandlerChange { direction ->
                 val viewportHeight = listState.layoutInfo.viewportSize.height
@@ -2236,7 +2255,10 @@ private fun ReaderScreen(
                     ReaderShortcutDirection.Up -> -distance
                 }
                 scope.launch {
-                    listState.animateScrollBy(delta)
+                    listState.animateScrollBy(
+                        value = delta,
+                        animationSpec = tween(durationMillis = shortcutAnimationMillis),
+                    )
                 }
                 true
             }
