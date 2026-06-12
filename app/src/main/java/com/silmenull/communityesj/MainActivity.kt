@@ -1111,12 +1111,6 @@ private fun LoginScreen(
                     modifier = Modifier.padding(top = 8.dp),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                Text(
-                    text = currentHost.displayName,
-                    modifier = Modifier.padding(top = 6.dp),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    fontSize = 13.sp,
-                )
                 Spacer(Modifier.height(28.dp))
                 OutlinedTextField(
                     value = email,
@@ -1652,11 +1646,12 @@ private fun CompactMetaChip(
     Text(
         text = text,
         modifier = modifier
-            .clip(RoundedCornerShape(6.dp))
+            .clip(RoundedCornerShape(4.dp))
             .background(containerColor)
-            .padding(horizontal = 4.dp, vertical = 0.dp),
+            .padding(horizontal = 4.dp, vertical = 3.dp),
         color = textColor,
         fontSize = 10.sp,
+        lineHeight = 10.sp,
         maxLines = 1,
         overflow = TextOverflow.Ellipsis,
     )
@@ -2355,30 +2350,25 @@ private fun ReaderScreen(
         }
 
         if (chapter != null) {
-            AnimatedVisibility(
+            ReaderControls(
                 visible = controlsVisible,
-                enter = fadeIn(tween(120)),
-                exit = fadeOut(tween(120)),
-            ) {
-                ReaderControls(
-                    chapterTitle = chapter.chapterTitle,
-                    colors = colors,
-                    darkMode = darkMode,
-                    hasPrevious = chapter.previousUrl != null,
-                    hasNext = chapter.nextUrl != null,
-                    onBack = onBack,
-                    onOpenWeb = { onOpenWeb(chapter.url) },
-                    onMenu = {
-                        chapterSheetVisible = true
-                    },
-                    onRefresh = onRefresh,
-                    cacheProgress = cacheProgress,
-                    onCacheWholeBook = onCacheWholeBook,
-                    onDarkModeChange = onDarkModeChange,
-                    onPrevious = { chapter.previousUrl?.let(onOpenUrl) },
-                    onNext = { chapter.nextUrl?.let(onOpenUrl) },
-                )
-            }
+                chapterTitle = chapter.chapterTitle,
+                colors = colors,
+                darkMode = darkMode,
+                hasPrevious = chapter.previousUrl != null,
+                hasNext = chapter.nextUrl != null,
+                onBack = onBack,
+                onOpenWeb = { onOpenWeb(chapter.url) },
+                onMenu = {
+                    chapterSheetVisible = true
+                },
+                onRefresh = onRefresh,
+                cacheProgress = cacheProgress,
+                onCacheWholeBook = onCacheWholeBook,
+                onDarkModeChange = onDarkModeChange,
+                onPrevious = { chapter.previousUrl?.let(onOpenUrl) },
+                onNext = { chapter.nextUrl?.let(onOpenUrl) },
+            )
         }
 
         if (isLoading && chapter != null) {
@@ -2565,6 +2555,7 @@ private fun ChapterListRow(
 
 @Composable
 private fun ReaderControls(
+    visible: Boolean,
     chapterTitle: String,
     colors: ReaderColors,
     darkMode: Boolean,
@@ -2591,10 +2582,21 @@ private fun ReaderControls(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color.Black.copy(alpha = if (darkMode) 0.28f else 0.16f)),
     ) {
         AnimatedVisibility(
-            visible = true,
+            visible = visible,
+            enter = fadeIn(tween(180)),
+            exit = fadeOut(tween(120)),
+            modifier = Modifier.matchParentSize()
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = if (darkMode) 0.28f else 0.16f)))
+        }
+
+        AnimatedVisibility(
+            visible = visible,
             enter = slideInVertically(animationSpec = tween(180)) { -it } + fadeIn(tween(180)),
             exit = slideOutVertically(animationSpec = tween(160)) { -it } + fadeOut(tween(120)),
             modifier = Modifier.align(Alignment.TopCenter),
@@ -2667,7 +2669,7 @@ private fun ReaderControls(
         }
 
         AnimatedVisibility(
-            visible = true,
+            visible = visible,
             enter = slideInVertically(animationSpec = tween(180)) { it } + fadeIn(tween(180)),
             exit = slideOutVertically(animationSpec = tween(160)) { it } + fadeOut(tween(120)),
             modifier = Modifier.align(Alignment.BottomCenter),
@@ -2741,21 +2743,6 @@ private fun NextChapterFooterButton(
             textDecoration = TextDecoration.Underline,
         )
     }
-//
-//    Button(
-//        onClick = onClick,
-//        modifier = Modifier
-//            .fillMaxWidth()
-//            .padding(top = 18.dp, bottom = 28.dp),
-//        shape = RoundedCornerShape(8.dp),
-//        colors = ButtonDefaults.buttonColors(
-//            containerColor = colors.accent,
-//            contentColor = Color.White,
-//        ),
-//        contentPadding = PaddingValues(vertical = 14.dp),
-//    ) {
-//        Text("下一章")
-//    }
 }
 
 @Composable
