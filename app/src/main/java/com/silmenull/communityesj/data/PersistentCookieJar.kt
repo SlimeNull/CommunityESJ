@@ -44,6 +44,13 @@ class PersistentCookieJar(
     }
 
     @Synchronized
+    fun removeExpired() {
+        if (cookies.removeAll { it.expiresAt < System.currentTimeMillis() }) {
+            persist()
+        }
+    }
+
+    @Synchronized
     fun hasCookies(): Boolean {
         return cookies.any { it.expiresAt > System.currentTimeMillis() }
     }

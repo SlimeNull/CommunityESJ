@@ -108,7 +108,7 @@ class EsjRepository(context: Context) {
     }
 
     fun expireLogin() {
-        cookieJar.clear()
+        cookieJar.removeExpired()
     }
 
     fun cachedBookshelf(page: Int = 1): BookshelfPage? {

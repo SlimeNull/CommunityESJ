@@ -72,7 +72,11 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.LightMode
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.OpenInBrowser
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
@@ -228,7 +232,7 @@ private sealed interface Screen {
 private class AppState(
     val repository: EsjRepository,
 ) {
-    var screen by mutableStateOf<Screen>(Screen.Login)
+    var screen by mutableStateOf<Screen>(initialScreen(repository))
     var isLoading by mutableStateOf(false)
     var feedbackDialogMessage by mutableStateOf<String?>(null)
     var bookshelf by mutableStateOf(BookshelfPage(emptyList(), 1, 1))
@@ -250,6 +254,16 @@ private class AppState(
     var cacheProgress by mutableStateOf<Map<String, BookCacheProgress>>(emptyMap())
     var localProgress by mutableStateOf<Map<String, ReadingProgress>>(emptyMap())
     var cacheJobs = mutableMapOf<String, Job>()
+
+    private companion object {
+        fun initialScreen(repository: EsjRepository): Screen {
+            return if (repository.hasLoggedInBefore() || repository.loginSessionState() == LoginSessionState.VALID) {
+                Screen.Bookshelf
+            } else {
+                Screen.Login
+            }
+        }
+    }
 }
 
 @Composable
@@ -750,6 +764,7 @@ private fun EsjReaderApp() {
                     onOpenUrl = { url ->
                         openReader(url, appState.readerChapter?.detailUrl ?: screen.detailUrlHint)
                     },
+                    onOpenWeb = { url -> openWeb(url) },
                     onRefresh = {
                         val chapter = appState.readerChapter ?: return@ReaderScreen
                         openReader(
@@ -1139,9 +1154,19 @@ private fun BookshelfScreen(
                     }
                 },
                 actions = {
-                    TextButton(onClick = onRefresh, enabled = !isLoading) { Text("刷新") }
+                    IconButton(onClick = onRefresh, enabled = !isLoading) {
+                        Icon(
+                            imageVector = Icons.Filled.Refresh,
+                            contentDescription = "刷新书架",
+                        )
+                    }
                     Box {
-                        TextButton(onClick = { menuExpanded = true }) { Text("菜单") }
+                        IconButton(onClick = { menuExpanded = true }) {
+                            Icon(
+                                imageVector = Icons.Filled.MoreVert,
+                                contentDescription = "菜单",
+                            )
+                        }
                         DropdownMenu(
                             expanded = menuExpanded,
                             onDismissRequest = { menuExpanded = false },
@@ -1473,8 +1498,11 @@ private fun SettingsScreen(
             TopAppBar(
                 title = { Text("设置") },
                 navigationIcon = {
-                    TextButton(onClick = onBack) {
-                        Text("书架")
+                    IconButton(onClick = onBack) {
+                        Icon(
+                            imageVector = Icons.Filled.Home,
+                            contentDescription = "返回书架",
+                        )
                     }
                 },
             )
@@ -1887,6 +1915,7 @@ private fun ReaderScreen(
     onProgress: (ReadingProgress) -> Unit,
     onOpenChapter: (ChapterLink) -> Unit,
     onOpenUrl: (String) -> Unit,
+    onOpenWeb: (String) -> Unit,
     onRefresh: () -> Unit,
     onDarkModeChange: (Boolean) -> Unit,
     readerThemePreset: ReaderThemePreset,
@@ -2079,6 +2108,7 @@ private fun ReaderScreen(
                     hasPrevious = chapter.previousUrl != null,
                     hasNext = chapter.nextUrl != null,
                     onBack = onBack,
+                    onOpenWeb = { onOpenWeb(chapter.url) },
                     onMenu = {
                         chapterSheetVisible = true
                     },
@@ -2146,8 +2176,11 @@ private fun ReaderScreen(
                             style = MaterialTheme.typography.titleLarge,
                             fontWeight = FontWeight.Bold,
                         )
-                        TextButton(onClick = onRefreshChapters) {
-                            Text("刷新")
+                        IconButton(onClick = onRefreshChapters) {
+                            Icon(
+                                imageVector = Icons.Filled.Refresh,
+                                contentDescription = "刷新目录",
+                            )
                         }
                     }
                     if (chapter?.chapters.isNullOrEmpty()) {
@@ -2279,6 +2312,7 @@ private fun ReaderControls(
     hasPrevious: Boolean,
     hasNext: Boolean,
     onBack: () -> Unit,
+    onOpenWeb: () -> Unit,
     onMenu: () -> Unit,
     onRefresh: () -> Unit,
     cacheProgress: BookCacheProgress?,
@@ -2314,8 +2348,12 @@ private fun ReaderControls(
                     .padding(horizontal = 12.dp, vertical = 10.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                TextButton(onClick = onBack) {
-                    Text("书架", color = colors.accent)
+                IconButton(onClick = onBack) {
+                    Icon(
+                        imageVector = Icons.Filled.Home,
+                        contentDescription = "返回书架",
+                        tint = colors.accent,
+                    )
                 }
                 Text(
                     text = chapterTitle,
@@ -2325,15 +2363,32 @@ private fun ReaderControls(
                     overflow = TextOverflow.Ellipsis,
                 )
                 Box {
-                    TextButton(onClick = { menuExpanded = true }) {
-                        Text("菜单", color = colors.accent)
+                    IconButton(onClick = { menuExpanded = true }) {
+                        Icon(
+                            imageVector = Icons.Filled.MoreVert,
+                            contentDescription = "菜单",
+                            tint = colors.accent,
+                        )
                     }
                     DropdownMenu(
                         expanded = menuExpanded,
                         onDismissRequest = { menuExpanded = false },
                     ) {
                         DropdownMenuItem(
+                            text = { Text("打开网页") },
+                            leadingIcon = {
+                                Icon(Icons.Filled.OpenInBrowser, contentDescription = null)
+                            },
+                            onClick = {
+                                menuExpanded = false
+                                onOpenWeb()
+                            },
+                        )
+                        DropdownMenuItem(
                             text = { Text("刷新") },
+                            leadingIcon = {
+                                Icon(Icons.Filled.Refresh, contentDescription = null)
+                            },
                             onClick = {
                                 menuExpanded = false
                                 onRefresh()
