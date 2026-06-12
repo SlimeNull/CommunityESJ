@@ -2376,22 +2376,9 @@ private fun ReaderControls(
                     ) {
                         DropdownMenuItem(
                             text = { Text("打开网页") },
-                            leadingIcon = {
-                                Icon(Icons.Filled.OpenInBrowser, contentDescription = null)
-                            },
                             onClick = {
                                 menuExpanded = false
                                 onOpenWeb()
-                            },
-                        )
-                        DropdownMenuItem(
-                            text = { Text("刷新") },
-                            leadingIcon = {
-                                Icon(Icons.Filled.Refresh, contentDescription = null)
-                            },
-                            onClick = {
-                                menuExpanded = false
-                                onRefresh()
                             },
                         )
                         val cacheText = if (cacheProgress?.isRunning == true && cacheProgress.total > 0) {
@@ -2406,6 +2393,13 @@ private fun ReaderControls(
                             onClick = {
                                 menuExpanded = false
                                 onCacheWholeBook()
+                            },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("刷新") },
+                            onClick = {
+                                menuExpanded = false
+                                onRefresh()
                             },
                         )
                     }
