@@ -7,8 +7,13 @@ import okhttp3.FormBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
+import java.io.ByteArrayOutputStream
 import java.io.IOException
+import java.util.UUID
 import java.util.concurrent.TimeUnit
+import java.util.zip.CRC32
+import java.util.zip.ZipEntry
+import java.util.zip.ZipOutputStream
 
 class LoginExpiredException : IOException("登录凭证已失效,请重新登录")
 
@@ -351,6 +356,24 @@ class EsjRepository(context: Context) {
         emit(isRunning = false)
     }
 
+    suspend fun exportBookAsEpub(book: BookItem): EpubExport = withContext(Dispatchers.IO) {
+        val currentBook = book.forCurrentHost()
+        val detailUrl = currentBook.detailUrl ?: throw IOException("这本书缺少目录链接")
+        val chapters = store.getChapters(detailUrl)
+            ?.map { it.copy(url = currentHostUrl(it.url)) }
+            ?.takeIf { it.isNotEmpty() }
+            ?: throw IOException("没有本地目录，无法导出")
+
+        val fileName = "${safeFileName(currentBook.title.ifBlank { "ESJ Read" })}.epub"
+        EpubExport(
+            fileName = fileName,
+            bytes = buildEpubBytes(
+                bookTitle = currentBook.title.ifBlank { "ESJ Read" },
+                chapters = chapters,
+            ),
+        )
+    }
+
     private fun chaptersDetailHint(chapters: List<ChapterLink>): String? {
         val firstUrl = chapters.firstOrNull()?.url ?: return null
         val match = Regex("""/forum/(\d+)/""").find(firstUrl) ?: return null
@@ -431,5 +454,184 @@ class EsjRepository(context: Context) {
             }
             return body
         }
+    }
+
+    private fun buildEpubBytes(
+        bookTitle: String,
+        chapters: List<ChapterLink>,
+    ): ByteArray {
+        val output = ByteArrayOutputStream()
+        ZipOutputStream(output).use { zip ->
+            zip.putStoredEntry("mimetype", "application/epub+zip".toByteArray(Charsets.UTF_8))
+            zip.putTextEntry(
+                "META-INF/container.xml",
+                """
+                <?xml version="1.0" encoding="UTF-8"?>
+                <container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+                  <rootfiles>
+                    <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml" />
+                  </rootfiles>
+                </container>
+                """.trimIndent(),
+            )
+            zip.putTextEntry("OEBPS/content.opf", buildOpf(bookTitle, chapters))
+            zip.putTextEntry("OEBPS/nav.xhtml", buildNav(bookTitle, chapters))
+            chapters.forEachIndexed { index, chapter ->
+                val cachedChapter = store.getChapter(chapter.url)
+                zip.putTextEntry(
+                    "OEBPS/chapter-${index + 1}.xhtml",
+                    buildChapterXhtml(
+                        bookTitle = bookTitle,
+                        chapterTitle = cachedChapter?.chapterTitle
+                            ?.takeIf { it.isNotBlank() }
+                            ?: chapter.title,
+                        contentBlocks = cachedChapter?.contentBlocks,
+                    ),
+                )
+            }
+        }
+        return output.toByteArray()
+    }
+
+    private fun ZipOutputStream.putStoredEntry(name: String, bytes: ByteArray) {
+        val crc = CRC32().apply { update(bytes) }
+        val entry = ZipEntry(name).apply {
+            method = ZipEntry.STORED
+            size = bytes.size.toLong()
+            compressedSize = bytes.size.toLong()
+            this.crc = crc.value
+        }
+        putNextEntry(entry)
+        write(bytes)
+        closeEntry()
+    }
+
+    private fun ZipOutputStream.putTextEntry(name: String, text: String) {
+        putNextEntry(ZipEntry(name))
+        write(text.toByteArray(Charsets.UTF_8))
+        closeEntry()
+    }
+
+    private fun buildOpf(bookTitle: String, chapters: List<ChapterLink>): String {
+        val manifestItems = chapters.indices.joinToString("\n") { index ->
+            """    <item id="chapter-${index + 1}" href="chapter-${index + 1}.xhtml" media-type="application/xhtml+xml" />"""
+        }
+        val spineItems = chapters.indices.joinToString("\n") { index ->
+            """    <itemref idref="chapter-${index + 1}" />"""
+        }
+        return """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="book-id">
+              <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+                <dc:identifier id="book-id">urn:uuid:${UUID.randomUUID()}</dc:identifier>
+                <dc:title>${bookTitle.xmlEscape()}</dc:title>
+                <dc:language>zh-CN</dc:language>
+                <dc:creator>ESJ Read</dc:creator>
+              </metadata>
+              <manifest>
+                <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav" />
+            $manifestItems
+              </manifest>
+              <spine>
+            $spineItems
+              </spine>
+            </package>
+        """.trimIndent()
+    }
+
+    private fun buildNav(bookTitle: String, chapters: List<ChapterLink>): String {
+        val items = chapters.mapIndexed { index, chapter ->
+            """      <li><a href="chapter-${index + 1}.xhtml">${chapter.title.xmlEscape()}</a></li>"""
+        }.joinToString("\n")
+        return """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <!DOCTYPE html>
+            <html xmlns="http://www.w3.org/1999/xhtml" xml:lang="zh-CN" lang="zh-CN">
+              <head>
+                <meta charset="UTF-8" />
+                <title>${bookTitle.xmlEscape()}</title>
+              </head>
+              <body>
+                <nav epub:type="toc" xmlns:epub="http://www.idpf.org/2007/ops">
+                  <h1>${bookTitle.xmlEscape()}</h1>
+                  <ol>
+            $items
+                  </ol>
+                </nav>
+              </body>
+            </html>
+        """.trimIndent()
+    }
+
+    private fun buildChapterXhtml(
+        bookTitle: String,
+        chapterTitle: String,
+        contentBlocks: List<ReaderContentBlock>?,
+    ): String {
+        val body = contentBlocks
+            ?.takeIf { it.isNotEmpty() }
+            ?.joinToString("\n") { block -> block.toEpubHtml() }
+            ?: """    <p>N/A</p>"""
+
+        return """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <!DOCTYPE html>
+            <html xmlns="http://www.w3.org/1999/xhtml" xml:lang="zh-CN" lang="zh-CN">
+              <head>
+                <meta charset="UTF-8" />
+                <title>${chapterTitle.xmlEscape()}</title>
+                <style>
+                  body { line-height: 1.7; margin: 1em; }
+                  p { margin: 0 0 1em 0; }
+                  img { display: block; max-width: 100%; height: auto; margin: 1em auto; }
+                  figure { margin: 1em 0; }
+                  .image-link { color: #666; font-size: 0.92em; }
+                </style>
+              </head>
+              <body>
+                <h1>${chapterTitle.xmlEscape()}</h1>
+                <p class="image-link">${bookTitle.xmlEscape()}</p>
+            $body
+              </body>
+            </html>
+        """.trimIndent()
+    }
+
+    private fun ReaderContentBlock.toEpubHtml(): String {
+        return when (this) {
+            is ReaderContentBlock.Text -> {
+                val content = text
+                    .split('\n')
+                    .joinToString("<br />") { it.xmlEscape() }
+                    .ifBlank { "N/A" }
+                """    <p>$content</p>"""
+            }
+
+            is ReaderContentBlock.Image -> {
+                val label = alt.takeIf { it.isNotBlank() } ?: "图片"
+                """
+                    <figure>
+                      <img src="${url.xmlEscape()}" alt="${label.xmlEscape()}" />
+                      <figcaption class="image-link">${label.xmlEscape()}</figcaption>
+                    </figure>
+                """.trimIndent()
+            }
+        }
+    }
+
+    private fun safeFileName(name: String): String {
+        val sanitized = name
+            .replace(Regex("""[\\/:*?"<>|]"""), "_")
+            .replace(Regex("""\s+"""), " ")
+            .trim()
+        return sanitized.take(80).ifBlank { "ESJ Read" }
+    }
+
+    private fun String.xmlEscape(): String {
+        return replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+            .replace("\"", "&quot;")
+            .replace("'", "&apos;")
     }
 }

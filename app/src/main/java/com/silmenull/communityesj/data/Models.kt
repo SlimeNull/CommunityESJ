@@ -67,6 +67,12 @@ data class ReaderLayoutSettings(
     val paragraphSpacingDp: Float = 14f,
     val firstLineIndentEm: Float = 2f,
     val horizontalPaddingDp: Float = 22f,
+    val shortcutPageTurnPercent: Float = 0.8f,
+)
+
+data class EpubExport(
+    val fileName: String,
+    val bytes: ByteArray,
 )
 
 enum class ReaderFontFamily(

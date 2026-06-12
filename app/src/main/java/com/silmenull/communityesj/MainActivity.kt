@@ -8,11 +8,17 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.graphics.Bitmap
 import android.graphics.drawable.BitmapDrawable
+import android.media.session.MediaSession
+import android.media.session.PlaybackState
 import android.provider.MediaStore
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.content.ContentValues
 import android.os.Environment
+import android.os.Handler
+import android.os.Looper
+import android.view.KeyEvent
 import android.view.View
 import android.view.Window
 import android.view.autofill.AutofillManager
@@ -39,6 +45,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
@@ -151,6 +158,7 @@ import com.silmenull.communityesj.data.BookshelfPage
 import com.silmenull.communityesj.data.ChapterLink
 import com.silmenull.communityesj.data.EsjRepository
 import com.silmenull.communityesj.data.EsjHost
+import com.silmenull.communityesj.data.EpubExport
 import com.silmenull.communityesj.data.LoginExpiredException
 import com.silmenull.communityesj.data.LoginSessionState
 import com.silmenull.communityesj.data.ReaderChapter
@@ -209,15 +217,124 @@ private data class ReaderSystemBarsState(
     val darkMode: Boolean,
 )
 
+private enum class ReaderShortcutDirection {
+    Up,
+    Down,
+}
+
 class MainActivity : ComponentActivity() {
+    private val mediaKeyHandler = Handler(Looper.getMainLooper())
+    private var pendingMediaKeyClick = false
+    private var readerShortcutHandler: ((ReaderShortcutDirection) -> Boolean)? = null
+    private var mediaSession: MediaSession? = null
+    private val mediaSingleClickRunnable = Runnable {
+        pendingMediaKeyClick = false
+        handleReaderShortcut(ReaderShortcutDirection.Down)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        mediaSession = createMediaSession()
         setContent {
             CommunityESJTheme {
-                EsjReaderApp()
+                EsjReaderApp(onReaderShortcutHandlerChange = ::setReaderShortcutHandler)
             }
         }
+    }
+
+    override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
+        if (event.repeatCount == 0) {
+            val handled = when (keyCode) {
+                KeyEvent.KEYCODE_VOLUME_DOWN -> handleReaderShortcut(ReaderShortcutDirection.Down)
+                KeyEvent.KEYCODE_VOLUME_UP -> handleReaderShortcut(ReaderShortcutDirection.Up)
+                KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,
+                KeyEvent.KEYCODE_HEADSETHOOK -> handleMediaKeyClick()
+                else -> false
+            }
+            if (handled) return true
+        }
+        return super.onKeyDown(keyCode, event)
+    }
+
+    override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean {
+        if (readerShortcutHandler != null) {
+            when (keyCode) {
+                KeyEvent.KEYCODE_VOLUME_DOWN,
+                KeyEvent.KEYCODE_VOLUME_UP,
+                KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,
+                KeyEvent.KEYCODE_HEADSETHOOK -> return true
+            }
+        }
+        return super.onKeyUp(keyCode, event)
+    }
+
+    override fun onDestroy() {
+        mediaKeyHandler.removeCallbacks(mediaSingleClickRunnable)
+        mediaSession?.isActive = false
+        mediaSession?.release()
+        super.onDestroy()
+    }
+
+    private fun setReaderShortcutHandler(handler: ((ReaderShortcutDirection) -> Boolean)?) {
+        readerShortcutHandler = handler
+        mediaSession?.isActive = handler != null
+        if (handler == null) {
+            pendingMediaKeyClick = false
+            mediaKeyHandler.removeCallbacks(mediaSingleClickRunnable)
+        }
+    }
+
+    private fun handleReaderShortcut(direction: ReaderShortcutDirection): Boolean {
+        return readerShortcutHandler?.invoke(direction) == true
+    }
+
+    private fun handleMediaKeyClick(): Boolean {
+        if (readerShortcutHandler == null) return false
+        if (pendingMediaKeyClick) {
+            pendingMediaKeyClick = false
+            mediaKeyHandler.removeCallbacks(mediaSingleClickRunnable)
+            return handleReaderShortcut(ReaderShortcutDirection.Up)
+        }
+
+        pendingMediaKeyClick = true
+        mediaKeyHandler.postDelayed(mediaSingleClickRunnable, MEDIA_CLICK_WINDOW_MS)
+        return true
+    }
+
+    private fun createMediaSession(): MediaSession {
+        return MediaSession(this, "ESJReadShortcut").apply {
+            setPlaybackState(
+                PlaybackState.Builder()
+                    .setActions(PlaybackState.ACTION_PLAY_PAUSE)
+                    .setState(PlaybackState.STATE_PLAYING, 0L, 1f)
+                    .build(),
+            )
+            setCallback(
+                object : MediaSession.Callback() {
+                    override fun onMediaButtonEvent(mediaButtonIntent: Intent): Boolean {
+                        val event = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                            mediaButtonIntent.getParcelableExtra(Intent.EXTRA_KEY_EVENT, KeyEvent::class.java)
+                        } else {
+                            @Suppress("DEPRECATION")
+                            mediaButtonIntent.getParcelableExtra(Intent.EXTRA_KEY_EVENT)
+                        }
+                        if (
+                            event?.action == KeyEvent.ACTION_DOWN &&
+                            event.repeatCount == 0 &&
+                            (event.keyCode == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE || event.keyCode == KeyEvent.KEYCODE_HEADSETHOOK)
+                        ) {
+                            return handleMediaKeyClick()
+                        }
+                        return super.onMediaButtonEvent(mediaButtonIntent)
+                    }
+                },
+            )
+        }
+    }
+
+    private companion object {
+        const val MEDIA_CLICK_WINDOW_MS = 500L
     }
 }
 
@@ -267,7 +384,9 @@ private class AppState(
 }
 
 @Composable
-private fun EsjReaderApp() {
+private fun EsjReaderApp(
+    onReaderShortcutHandlerChange: (((ReaderShortcutDirection) -> Boolean)?) -> Unit,
+) {
     val context = LocalContext.current
     val appState = remember(context) { AppState(EsjRepository(context)) }
     val scope = rememberCoroutineScope()
@@ -275,6 +394,8 @@ private fun EsjReaderApp() {
         context.getSystemService(AutofillManager::class.java)
     }
     var readerBarsState by remember { mutableStateOf<ReaderSystemBarsState?>(null) }
+    var pendingEpubExportBook by remember { mutableStateOf<BookItem?>(null) }
+    var isExportingEpub by remember { mutableStateOf(false) }
 
     fun showFeedback(message: String, forceDialog: Boolean = false) {
         val text = message.trim()
@@ -330,6 +451,26 @@ private fun EsjReaderApp() {
         val clipboard = context.getSystemService(ClipboardManager::class.java)
         clipboard?.setPrimaryClip(ClipData.newPlainText(label, text))
         showFeedback("已复制")
+    }
+
+    fun exportEpub(book: BookItem) {
+        scope.launch {
+            isExportingEpub = true
+            runCatching {
+                val export = appState.repository.exportBookAsEpub(book)
+                saveEpubToDownloads(context, export)
+                export.fileName
+            }.onSuccess { fileName ->
+                showFeedback("已保存到下载：$fileName")
+            }.onFailure { error ->
+                if (error is SecurityException) {
+                    showFeedback("软件没有权限写入文件", forceDialog = true)
+                } else {
+                    showFeedback(error.userMessage("导出 EPUB 失败"), forceDialog = true)
+                }
+            }
+            isExportingEpub = false
+        }
     }
 
     fun switchHost(host: EsjHost) {
@@ -589,6 +730,11 @@ private fun EsjReaderApp() {
         }
     }
 
+    if (appState.screen !is Screen.Reader) {
+        readerBarsState = null
+        appState.readerControlsVisible = false
+    }
+
     LaunchedEffect(Unit) {
         val sessionState = appState.repository.loginSessionState()
         if (appState.repository.hasLoggedInBefore()) {
@@ -609,13 +755,6 @@ private fun EsjReaderApp() {
                 showFeedback("登录凭证已过期,请重新登录")
             }
             LoginSessionState.MISSING -> Unit
-        }
-    }
-
-    LaunchedEffect(appState.screen) {
-        if (appState.screen !is Screen.Reader) {
-            readerBarsState = null
-            appState.readerControlsVisible = false
         }
     }
 
@@ -695,6 +834,9 @@ private fun EsjReaderApp() {
                         } else {
                             copyText("书籍链接", link)
                         }
+                    },
+                    onExportBook = { book ->
+                        pendingEpubExportBook = book
                     },
                     onOpenSettings = {
                         appState.screen = Screen.Settings
@@ -794,6 +936,7 @@ private fun EsjReaderApp() {
                     onRefreshChapters = ::refreshCurrentBookChapters,
                     onSystemBarsState = { readerBarsState = it },
                     onFeedback = ::showFeedback,
+                    onReaderShortcutHandlerChange = onReaderShortcutHandlerChange,
                 )
             }
         }
@@ -807,6 +950,37 @@ private fun EsjReaderApp() {
             confirmButton = {
                 TextButton(onClick = { appState.feedbackDialogMessage = null }) {
                     Text("确定")
+                }
+            },
+        )
+    }
+
+    pendingEpubExportBook?.let { book ->
+        AlertDialog(
+            onDismissRequest = {
+                if (!isExportingEpub) {
+                    pendingEpubExportBook = null
+                }
+            },
+            title = { Text("导出 EPUB") },
+            text = { Text("仅会导出已缓存过的章节, 确认继续?") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        pendingEpubExportBook = null
+                        exportEpub(book)
+                    },
+                    enabled = !isExportingEpub,
+                ) {
+                    Text("确认")
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { pendingEpubExportBook = null },
+                    enabled = !isExportingEpub,
+                ) {
+                    Text("取消")
                 }
             },
         )
@@ -1115,6 +1289,7 @@ private fun BookshelfScreen(
     showLatestChapter: Boolean,
     onCopyBookTitle: (BookItem) -> Unit,
     onCopyBookLink: (BookItem) -> Unit,
+    onExportBook: (BookItem) -> Unit,
     onOpenSettings: () -> Unit,
     onOpenGithub: () -> Unit,
     onLogout: () -> Unit,
@@ -1249,6 +1424,7 @@ private fun BookshelfScreen(
                         onClick = { onOpenBook(book) },
                         onCopyTitle = { onCopyBookTitle(book) },
                         onCopyLink = { onCopyBookLink(book) },
+                        onExport = { onExportBook(book) },
                     )
                     HorizontalDivider()
                 }
@@ -1362,6 +1538,7 @@ private fun BookRow(
     onClick: () -> Unit,
     onCopyTitle: () -> Unit,
     onCopyLink: () -> Unit,
+    onExport: () -> Unit,
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
     val lastRead = localProgress?.chapterTitle
@@ -1441,6 +1618,13 @@ private fun BookRow(
                 onClick = {
                     menuExpanded = false
                     onCopyLink()
+                },
+            )
+            DropdownMenuItem(
+                text = { Text("导出为 EPUB") },
+                onClick = {
+                    menuExpanded = false
+                    onExport()
                 },
             )
         }
@@ -1640,6 +1824,31 @@ private fun SettingsScreen(
                     onValueChange = { value ->
                         onReaderLayoutSettingsChange(
                             readerLayoutSettings.copy(horizontalPaddingDp = (value / 2f).roundToInt() * 2f),
+                        )
+                    },
+                )
+            }
+            item {
+                HorizontalDivider(modifier = Modifier.padding(vertical = 6.dp))
+                Text(
+                    text = "快捷翻页",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
+            item {
+                ReaderSettingSlider(
+                    title = "翻页距离",
+                    valueText = "${(readerLayoutSettings.shortcutPageTurnPercent * 100f).roundToInt()}%",
+                    value = readerLayoutSettings.shortcutPageTurnPercent,
+                    valueRange = 0.1f..1f,
+                    steps = 17,
+                    onValueChange = { value ->
+                        onReaderLayoutSettingsChange(
+                            readerLayoutSettings.copy(
+                                shortcutPageTurnPercent = (value * 20f).roundToInt()
+                                    .coerceIn(2, 20) / 20f,
+                            ),
                         )
                     },
                 )
@@ -1927,6 +2136,7 @@ private fun ReaderScreen(
     onRefreshChapters: () -> Unit,
     onSystemBarsState: (ReaderSystemBarsState) -> Unit,
     onFeedback: (String, Boolean) -> Unit,
+    onReaderShortcutHandlerChange: (((ReaderShortcutDirection) -> Boolean)?) -> Unit,
 ) {
     var chapterSheetVisible by remember { mutableStateOf(false) }
     var imageViewerUrl by remember { mutableStateOf<String?>(null) }
@@ -1943,6 +2153,8 @@ private fun ReaderScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val showStatusBar = controlsVisible || chapterSheetVisible || imageViewerUrl != null
+    val shortcutEnabled = chapter != null && !controlsVisible && !chapterSheetVisible && imageViewerUrl == null
+    val shortcutPageTurnPercent = readerLayoutSettings.shortcutPageTurnPercent.coerceIn(0.1f, 1f)
 
     BackHandler {
         if (chapterSheetVisible) {
@@ -2009,6 +2221,31 @@ private fun ReaderScreen(
         val index = current.chapters.indexOfFirst { it.url == current.url }
         if (index >= 0) {
             chapterListState.scrollToItem((index - 2).coerceAtLeast(0))
+        }
+    }
+
+    DisposableEffect(shortcutEnabled, shortcutPageTurnPercent, listState, scope) {
+        if (shortcutEnabled) {
+            onReaderShortcutHandlerChange { direction ->
+                val viewportHeight = listState.layoutInfo.viewportSize.height
+                    .takeIf { it > 0 }
+                    ?: return@onReaderShortcutHandlerChange false
+                val distance = viewportHeight * shortcutPageTurnPercent
+                val delta = when (direction) {
+                    ReaderShortcutDirection.Down -> distance
+                    ReaderShortcutDirection.Up -> -distance
+                }
+                scope.launch {
+                    listState.animateScrollBy(delta)
+                }
+                true
+            }
+        } else {
+            onReaderShortcutHandlerChange(null)
+        }
+
+        onDispose {
+            onReaderShortcutHandlerChange(null)
         }
     }
 
@@ -2900,6 +3137,31 @@ private suspend fun saveImageToGallery(context: android.content.Context, imageUr
         } ?: throw IOException("无法打开相册文件")
         values.clear()
         values.put(MediaStore.Images.Media.IS_PENDING, 0)
+        resolver.update(uri, values, null, null)
+    }.onFailure {
+        resolver.delete(uri, null, null)
+        throw it
+    }
+}
+
+private suspend fun saveEpubToDownloads(context: android.content.Context, export: EpubExport) = withContext(Dispatchers.IO) {
+    val values = ContentValues().apply {
+        put(MediaStore.MediaColumns.DISPLAY_NAME, export.fileName)
+        put(MediaStore.MediaColumns.MIME_TYPE, "application/epub+zip")
+        put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+        put(MediaStore.MediaColumns.IS_PENDING, 1)
+    }
+
+    val resolver = context.contentResolver
+    val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+        ?: throw IOException("无法创建下载文件")
+    runCatching {
+        resolver.openOutputStream(uri)?.use { stream ->
+            stream.write(export.bytes)
+            stream.flush()
+        } ?: throw IOException("无法打开下载文件")
+        values.clear()
+        values.put(MediaStore.MediaColumns.IS_PENDING, 0)
         resolver.update(uri, values, null, null)
     }.onFailure {
         resolver.delete(uri, null, null)
