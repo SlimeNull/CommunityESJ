@@ -85,6 +85,7 @@ import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.OpenInBrowser
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.automirrored.filled.List
+import androidx.compose.material.icons.filled.AddComment
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material3.AlertDialog
@@ -142,6 +143,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalAutofill
 import androidx.compose.ui.platform.LocalAutofillTree
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -2188,6 +2190,7 @@ private fun ReaderScreen(
     onReaderShortcutHandlerChange: (((ReaderShortcutDirection) -> Boolean)?) -> Unit,
 ) {
     var chapterSheetVisible by remember { mutableStateOf(false) }
+    var isCommentTextFillFocused by remember { mutableStateOf(false) }
     var imageViewerUrl by remember { mutableStateOf<String?>(null) }
     var commentInput by remember(chapter?.url) { mutableStateOf("") }
     val listState = rememberLazyListState()
@@ -2201,6 +2204,7 @@ private fun ReaderScreen(
         textIndent = TextIndent(firstLine = (readerLayoutSettings.fontSizeSp * readerLayoutSettings.firstLineIndentEm).sp),
     )
     val context = LocalContext.current
+    val focusManager = LocalFocusManager.current
     val scope = rememberCoroutineScope()
     val showStatusBar = controlsVisible || chapterSheetVisible || imageViewerUrl != null
     val shortcutEnabled = chapter != null && !controlsVisible && !chapterSheetVisible && imageViewerUrl == null
@@ -2261,8 +2265,13 @@ private fun ReaderScreen(
 
     LaunchedEffect(Unit) {
         snapshotFlow { listState.isScrollInProgress }.collect { scrolling ->
-            if (scrolling && latestControlsVisible) {
-                onControlsVisibleChange(false)
+            if (scrolling){
+                if (isCommentTextFillFocused) {
+                    focusManager.clearFocus()
+                }
+                if (controlsVisible) {
+                    onControlsVisibleChange(false)
+                }
             }
         }
     }
@@ -2382,11 +2391,16 @@ private fun ReaderScreen(
                             posting = commentPosting,
                             colors = colors,
                             onInputChange = { commentInput = it },
+                            onTextFillFocusChanged = {
+                                isCommentTextFillFocused = it
+                            },
                             onSubmit = {
                                 val text = commentInput.trim()
                                 if (text.isNotBlank()) {
                                     commentInput = ""
                                     onPostComment(text)
+                                } else {
+                                    Toast.makeText(context, "评论不能为空", Toast.LENGTH_SHORT).show()
                                 }
                             },
                         )
@@ -2815,6 +2829,7 @@ private fun ReaderCommentsSection(
     input: String,
     posting: Boolean,
     colors: ReaderColors,
+    onTextFillFocusChanged: (Boolean) -> Unit,
     onInputChange: (String) -> Unit,
     onSubmit: () -> Unit,
 ) {
@@ -2831,44 +2846,32 @@ private fun ReaderCommentsSection(
             style = MaterialTheme.typography.titleMedium,
             fontWeight = FontWeight.SemiBold,
         )
-        Row(
+        OutlinedTextField(
+            value = input,
+            onValueChange = onInputChange,
             modifier = Modifier
+                .onFocusChanged({onTextFillFocusChanged(it.isFocused)})
+                .padding(top = 12.dp)
                 .fillMaxWidth()
-                .padding(top = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            OutlinedTextField(
-                value = input,
-                onValueChange = onInputChange,
-                modifier = Modifier.weight(1f),
-                enabled = !posting,
-                minLines = 1,
-                maxLines = 4,
-                placeholder = { Text("发表评论") },
-            )
-            Button(
-                onClick = onSubmit,
-                enabled = !posting && input.isNotBlank(),
-                shape = RoundedCornerShape(8.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = colors.accent,
-                    contentColor = Color.White,
-                    disabledContainerColor = colors.disabled,
-                    disabledContentColor = colors.disabledText,
-                ),
-            ) {
-                if (posting) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(18.dp),
-                        strokeWidth = 2.dp,
-                        color = colors.disabledText,
-                    )
-                } else {
-                    Text("发送")
+                .padding(0.dp, 0.dp, 0.dp, 18.dp),
+            enabled = !posting,
+            minLines = 1,
+            maxLines = 4,
+            placeholder = { Text("发表评论") },
+            trailingIcon = {
+                Box(modifier = Modifier.fillMaxHeight()) {
+                    IconButton(
+                        modifier = Modifier.align(Alignment.BottomCenter),
+                        onClick = onSubmit) {
+                        Icon(
+                            imageVector = Icons.Filled.AddComment,
+                            contentDescription = "发送",
+                            tint = colors.accent
+                        )
+                    }
                 }
             }
-        }
+        )
 
         if (comments.isEmpty()) {
             Text(

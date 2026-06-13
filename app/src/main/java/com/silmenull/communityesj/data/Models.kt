@@ -81,9 +81,9 @@ data class ReadingProgress(
 data class ReaderLayoutSettings(
     val fontFamily: ReaderFontFamily = ReaderFontFamily.SYSTEM,
     val fontSizeSp: Float = 19f,
-    val lineHeightMultiplier: Float = 1.68f,
-    val paragraphSpacingDp: Float = 14f,
-    val firstLineIndentEm: Float = 2f,
+    val lineHeightMultiplier: Float = 1.3f,
+    val paragraphSpacingDp: Float = 18f,
+    val firstLineIndentEm: Float = 1.5f,
     val horizontalPaddingDp: Float = 22f,
     val shortcutPageTurnPercent: Float = 0.8f,
     val shortcutAnimationMillis: Int = 300,
