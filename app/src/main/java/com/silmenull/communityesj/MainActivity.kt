@@ -259,6 +259,7 @@ class MainActivity : ComponentActivity() {
                 KeyEvent.KEYCODE_VOLUME_UP -> handleReaderShortcut(ReaderShortcutDirection.Up)
                 KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,
                 KeyEvent.KEYCODE_HEADSETHOOK -> handleMediaKeyClick()
+
                 else -> false
             }
             if (handled) return true
@@ -323,7 +324,10 @@ class MainActivity : ComponentActivity() {
                 object : MediaSession.Callback() {
                     override fun onMediaButtonEvent(mediaButtonIntent: Intent): Boolean {
                         val event = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                            mediaButtonIntent.getParcelableExtra(Intent.EXTRA_KEY_EVENT, KeyEvent::class.java)
+                            mediaButtonIntent.getParcelableExtra(
+                                Intent.EXTRA_KEY_EVENT,
+                                KeyEvent::class.java
+                            )
                         } else {
                             @Suppress("DEPRECATION")
                             mediaButtonIntent.getParcelableExtra(Intent.EXTRA_KEY_EVENT)
@@ -438,7 +442,13 @@ private fun EsjReaderApp(
             appState.cacheProgress = appState.cacheProgress + progress
         }
         val readingProgress = page.books
-            .mapNotNull { book -> book.detailUrl?.let { detailUrl -> appState.repository.progressFor(detailUrl) } }
+            .mapNotNull { book ->
+                book.detailUrl?.let { detailUrl ->
+                    appState.repository.progressFor(
+                        detailUrl
+                    )
+                }
+            }
             .associateBy { it.detailUrl }
         appState.localProgress = readingProgress
     }
@@ -494,18 +504,22 @@ private fun EsjReaderApp(
             Screen.Login -> {
                 if (appState.repository.hasLoggedInBefore()) {
                     appState.screen = Screen.Bookshelf
-                    appState.bookshelf = appState.repository.cachedBookshelf(1) ?: BookshelfPage(emptyList(), 1, 1)
+                    appState.bookshelf =
+                        appState.repository.cachedBookshelf(1) ?: BookshelfPage(emptyList(), 1, 1)
                     syncBookshelfCacheProgress(appState.bookshelf)
                     appState.currentPage = 1
                 }
             }
+
             Screen.Bookshelf, Screen.Settings -> {
                 appState.screen = Screen.Bookshelf
                 appState.readerChapter = null
-                appState.bookshelf = appState.repository.cachedBookshelf(1) ?: BookshelfPage(emptyList(), 1, 1)
+                appState.bookshelf =
+                    appState.repository.cachedBookshelf(1) ?: BookshelfPage(emptyList(), 1, 1)
                 syncBookshelfCacheProgress(appState.bookshelf)
                 appState.currentPage = 1
             }
+
             is Screen.Reader -> Unit
         }
     }
@@ -786,6 +800,7 @@ private fun EsjReaderApp(
                 appState.bookshelfOfflineMessage = null
                 showFeedback("登录凭证已过期,请重新登录")
             }
+
             LoginSessionState.MISSING -> Unit
         }
     }
@@ -860,7 +875,8 @@ private fun EsjReaderApp(
                     showLatestChapter = appState.showLatestChapter,
                     onCopyBookTitle = { book -> copyText("书名", book.title) },
                     onCopyBookLink = { book ->
-                        val link = book.detailUrl ?: book.lastReadChapterUrl ?: book.latestChapterUrl
+                        val link =
+                            book.detailUrl ?: book.lastReadChapterUrl ?: book.latestChapterUrl
                         if (link.isNullOrBlank()) {
                             showFeedback("这本书缺少链接")
                         } else {
@@ -930,10 +946,14 @@ private fun EsjReaderApp(
                     onProgress = { progress ->
                         appState.readerScrollProgress = progress.scrollProgress
                         appState.repository.saveProgress(progress)
-                        appState.localProgress = appState.localProgress + (progress.detailUrl to progress)
+                        appState.localProgress =
+                            appState.localProgress + (progress.detailUrl to progress)
                     },
                     onOpenChapter = { chapter ->
-                        openReader(chapter.url, appState.readerChapter?.detailUrl ?: screen.detailUrlHint)
+                        openReader(
+                            chapter.url,
+                            appState.readerChapter?.detailUrl ?: screen.detailUrlHint
+                        )
                     },
                     onOpenUrl = { url ->
                         openReader(url, appState.readerChapter?.detailUrl ?: screen.detailUrlHint)
@@ -1104,7 +1124,7 @@ private fun LoginScreen(
     val canSubmit = !isLoading && email.isNotBlank() && password.isNotBlank()
     val view = LocalView.current
 
-    val balabala by remember { derivedStateOf { email + password }}
+    val balabala by remember { derivedStateOf { email + password } }
 
     DisposableEffect(view) {
         val previous = view.importantForAutofill
@@ -1159,7 +1179,10 @@ private fun LoginScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .autofill(
-                            autofillTypes = listOf(AutofillType.EmailAddress, AutofillType.Username),
+                            autofillTypes = listOf(
+                                AutofillType.EmailAddress,
+                                AutofillType.Username
+                            ),
                             onFill = { email = it },
                         ),
                     enabled = !isLoading,
@@ -1800,7 +1823,11 @@ private fun SettingsScreen(
                     valueRange = 14f..30f,
                     steps = 15,
                     onValueChange = { value ->
-                        onReaderLayoutSettingsChange(readerLayoutSettings.copy(fontSizeSp = value.roundToInt().toFloat()))
+                        onReaderLayoutSettingsChange(
+                            readerLayoutSettings.copy(
+                                fontSizeSp = value.roundToInt().toFloat()
+                            )
+                        )
                     },
                 )
             }
@@ -1895,7 +1922,10 @@ private fun SettingsScreen(
                     onValueChange = { value ->
                         onReaderLayoutSettingsChange(
                             readerLayoutSettings.copy(
-                                shortcutAnimationMillis = ((value / 50f).roundToInt() * 50).coerceIn(100, 1000),
+                                shortcutAnimationMillis = ((value / 50f).roundToInt() * 50).coerceIn(
+                                    100,
+                                    1000
+                                ),
                             ),
                         )
                     },
@@ -2198,7 +2228,8 @@ private fun ReaderScreen(
     val interactionSource = remember { MutableInteractionSource() }
     val colors = readerColors(readerThemePreset)
     val readerFontSize = readerLayoutSettings.fontSizeSp.sp
-    val readerLineHeight = (readerLayoutSettings.fontSizeSp * readerLayoutSettings.lineHeightMultiplier).sp
+    val readerLineHeight =
+        (readerLayoutSettings.fontSizeSp * readerLayoutSettings.lineHeightMultiplier).sp
     val readerTextStyle = TextStyle(
         fontFamily = readerLayoutSettings.fontFamily.toFontFamily(),
         textIndent = TextIndent(firstLine = (readerLayoutSettings.fontSizeSp * readerLayoutSettings.firstLineIndentEm).sp),
@@ -2207,7 +2238,8 @@ private fun ReaderScreen(
     val focusManager = LocalFocusManager.current
     val scope = rememberCoroutineScope()
     val showStatusBar = controlsVisible || chapterSheetVisible || imageViewerUrl != null
-    val shortcutEnabled = chapter != null && !controlsVisible && !chapterSheetVisible && imageViewerUrl == null
+    val shortcutEnabled =
+        chapter != null && !controlsVisible && !chapterSheetVisible && imageViewerUrl == null
     val shortcutPageTurnPercent = readerLayoutSettings.shortcutPageTurnPercent.coerceIn(0.1f, 1f)
     val shortcutAnimationMillis = readerLayoutSettings.shortcutAnimationMillis.coerceIn(100, 1000)
     val latestControlsVisible by rememberUpdatedState(controlsVisible)
@@ -2265,7 +2297,7 @@ private fun ReaderScreen(
 
     LaunchedEffect(Unit) {
         snapshotFlow { listState.isScrollInProgress }.collect { scrolling ->
-            if (scrolling){
+            if (scrolling) {
                 if (isCommentTextFillFocused) {
                     focusManager.clearFocus()
                 }
@@ -2284,7 +2316,13 @@ private fun ReaderScreen(
         }
     }
 
-    DisposableEffect(shortcutEnabled, shortcutPageTurnPercent, shortcutAnimationMillis, listState, scope) {
+    DisposableEffect(
+        shortcutEnabled,
+        shortcutPageTurnPercent,
+        shortcutAnimationMillis,
+        listState,
+        scope
+    ) {
         if (shortcutEnabled) {
             onReaderShortcutHandlerChange { direction ->
                 val viewportHeight = listState.layoutInfo.viewportSize.height
@@ -2332,7 +2370,14 @@ private fun ReaderScreen(
                         .clickable(
                             interactionSource = interactionSource,
                             indication = null,
-                        ) { onControlsVisibleChange(!controlsVisible) },
+                        ) {
+                            val controlsVisibleNewValue = !controlsVisible
+                            onControlsVisibleChange(controlsVisibleNewValue)
+
+                            if (controlsVisibleNewValue && isCommentTextFillFocused) {
+                                focusManager.clearFocus()
+                            }
+                        },
                     contentPadding = PaddingValues(
                         start = readerLayoutSettings.horizontalPaddingDp.dp,
                         top = 44.dp,
@@ -2392,6 +2437,9 @@ private fun ReaderScreen(
                             onInputChange = { commentInput = it },
                             onTextFillFocusChanged = {
                                 isCommentTextFillFocused = it
+                                if (it) {
+                                    onControlsVisibleChange(false)
+                                }
                             },
                             onSubmit = {
                                 val text = commentInput.trim()
@@ -2399,7 +2447,8 @@ private fun ReaderScreen(
                                     commentInput = ""
                                     onPostComment(text)
                                 } else {
-                                    Toast.makeText(context, "评论不能为空", Toast.LENGTH_SHORT).show()
+                                    Toast.makeText(context, "评论不能为空", Toast.LENGTH_SHORT)
+                                        .show()
                                 }
                             },
                         )
@@ -2510,7 +2559,12 @@ private fun ReaderScreen(
                         }
                     }
                     if (chapter?.chapters.isNullOrEmpty()) {
-                        EmptyState("没有解析到目录", modifier = Modifier.fillMaxWidth().padding(top = 48.dp))
+                        EmptyState(
+                            "没有解析到目录",
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 48.dp)
+                        )
                     } else {
                         Box(modifier = Modifier.fillMaxSize()) {
                             LazyColumn(
@@ -2669,7 +2723,8 @@ private fun ReaderControls(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(Color.Black.copy(alpha = if (darkMode) 0.28f else 0.16f)))
+                    .background(Color.Black.copy(alpha = if (darkMode) 0.28f else 0.16f))
+            )
         }
 
         AnimatedVisibility(
@@ -2719,13 +2774,14 @@ private fun ReaderControls(
                                 onOpenWeb()
                             },
                         )
-                        val cacheText = if (cacheProgress?.isRunning == true && cacheProgress.total > 0) {
-                            "正在缓存(${cacheProgress.cached}/${cacheProgress.total})"
-                        } else if (cacheProgress?.isRunning == true) {
-                            "正在缓存"
-                        } else {
-                            "缓存整本"
-                        }
+                        val cacheText =
+                            if (cacheProgress?.isRunning == true && cacheProgress.total > 0) {
+                                "正在缓存(${cacheProgress.cached}/${cacheProgress.total})"
+                            } else if (cacheProgress?.isRunning == true) {
+                                "正在缓存"
+                            } else {
+                                "缓存整本"
+                            }
                         DropdownMenuItem(
                             text = { Text(cacheText) },
                             onClick = {
@@ -2806,7 +2862,7 @@ private fun NextChapterFooterButton(
     colors: ReaderColors,
     onClick: () -> Unit,
 ) {
-    Box(modifier = Modifier.fillMaxWidth()){
+    Box(modifier = Modifier.fillMaxWidth()) {
         Text(
             text = "下一章",
             fontSize = 18.sp,
@@ -2849,7 +2905,7 @@ private fun ReaderCommentsSection(
             value = input,
             onValueChange = onInputChange,
             modifier = Modifier
-                .onFocusChanged({onTextFillFocusChanged(it.isFocused)})
+                .onFocusChanged({ onTextFillFocusChanged(it.isFocused) })
                 .padding(top = 12.dp)
                 .fillMaxWidth()
                 .padding(0.dp, 0.dp, 0.dp, 18.dp),
@@ -3176,7 +3232,8 @@ private fun LazyListState.readingProgress(): Float {
     if (!canScrollForward) return 1f
 
     val firstVisibleItem = info.visibleItemsInfo.firstOrNull() ?: return 0f
-    val itemProgress = firstVisibleItemScrollOffset.toFloat() / firstVisibleItem.size.coerceAtLeast(1).toFloat()
+    val itemProgress =
+        firstVisibleItemScrollOffset.toFloat() / firstVisibleItem.size.coerceAtLeast(1).toFloat()
     return ((firstVisibleItemIndex + itemProgress) / (total - 1).toFloat()).coerceIn(0f, 1f)
 }
 
@@ -3332,11 +3389,19 @@ private fun screenTransition(initial: Screen, target: Screen): ContentTransform 
     val leavingReader = initial is Screen.Reader && target !is Screen.Reader
 
     return when {
-        enteringReader -> (slideInHorizontally(animationSpec = tween(duration)) { it } + fadeIn(tween(duration)))
-            .togetherWith(slideOutHorizontally(animationSpec = tween(duration)) { -it / 3 } + fadeOut(tween(duration)))
+        enteringReader -> (slideInHorizontally(animationSpec = tween(duration)) { it } + fadeIn(
+            tween(duration)
+        ))
+            .togetherWith(slideOutHorizontally(animationSpec = tween(duration)) { -it / 3 } + fadeOut(
+                tween(duration)
+            ))
 
-        leavingReader -> (slideInHorizontally(animationSpec = tween(duration)) { -it / 3 } + fadeIn(tween(duration)))
-            .togetherWith(slideOutHorizontally(animationSpec = tween(duration)) { it } + fadeOut(tween(duration)))
+        leavingReader -> (slideInHorizontally(animationSpec = tween(duration)) { -it / 3 } + fadeIn(
+            tween(duration)
+        ))
+            .togetherWith(slideOutHorizontally(animationSpec = tween(duration)) { it } + fadeOut(
+                tween(duration)
+            ))
 
         else -> (fadeIn(tween(duration))).togetherWith(fadeOut(tween(duration)))
     }
@@ -3350,63 +3415,68 @@ private fun Throwable.userMessage(prefix: String): String {
     return "$prefix：$detail"
 }
 
-private suspend fun saveImageToGallery(context: android.content.Context, imageUrl: String) = withContext(Dispatchers.IO) {
-    val request = ImageRequest.Builder(context)
-        .data(imageUrl)
-        .allowHardware(false)
-        .build()
-    val result = context.imageLoader.execute(request) as? SuccessResult
-        ?: throw IOException("图片加载失败")
-    val bitmap = (result.drawable as? BitmapDrawable)?.bitmap
-        ?: throw IOException("图片格式不支持保存")
+private suspend fun saveImageToGallery(context: android.content.Context, imageUrl: String) =
+    withContext(Dispatchers.IO) {
+        val request = ImageRequest.Builder(context)
+            .data(imageUrl)
+            .allowHardware(false)
+            .build()
+        val result = context.imageLoader.execute(request) as? SuccessResult
+            ?: throw IOException("图片加载失败")
+        val bitmap = (result.drawable as? BitmapDrawable)?.bitmap
+            ?: throw IOException("图片格式不支持保存")
 
-    val fileName = "community_esj_${System.currentTimeMillis()}.png"
-    val values = ContentValues().apply {
-        put(MediaStore.Images.Media.DISPLAY_NAME, fileName)
-        put(MediaStore.Images.Media.MIME_TYPE, "image/png")
-        put(MediaStore.Images.Media.RELATIVE_PATH, "${Environment.DIRECTORY_PICTURES}/CommunityESJ")
-        put(MediaStore.Images.Media.IS_PENDING, 1)
+        val fileName = "community_esj_${System.currentTimeMillis()}.png"
+        val values = ContentValues().apply {
+            put(MediaStore.Images.Media.DISPLAY_NAME, fileName)
+            put(MediaStore.Images.Media.MIME_TYPE, "image/png")
+            put(
+                MediaStore.Images.Media.RELATIVE_PATH,
+                "${Environment.DIRECTORY_PICTURES}/CommunityESJ"
+            )
+            put(MediaStore.Images.Media.IS_PENDING, 1)
+        }
+
+        val resolver = context.contentResolver
+        val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+            ?: throw IOException("无法创建相册文件")
+        runCatching {
+            resolver.openOutputStream(uri)?.use { stream ->
+                if (!bitmap.compress(Bitmap.CompressFormat.PNG, 100, stream)) {
+                    throw IOException("图片写入失败")
+                }
+            } ?: throw IOException("无法打开相册文件")
+            values.clear()
+            values.put(MediaStore.Images.Media.IS_PENDING, 0)
+            resolver.update(uri, values, null, null)
+        }.onFailure {
+            resolver.delete(uri, null, null)
+            throw it
+        }
     }
 
-    val resolver = context.contentResolver
-    val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
-        ?: throw IOException("无法创建相册文件")
-    runCatching {
-        resolver.openOutputStream(uri)?.use { stream ->
-            if (!bitmap.compress(Bitmap.CompressFormat.PNG, 100, stream)) {
-                throw IOException("图片写入失败")
-            }
-        } ?: throw IOException("无法打开相册文件")
-        values.clear()
-        values.put(MediaStore.Images.Media.IS_PENDING, 0)
-        resolver.update(uri, values, null, null)
-    }.onFailure {
-        resolver.delete(uri, null, null)
-        throw it
-    }
-}
+private suspend fun saveEpubToDownloads(context: android.content.Context, export: EpubExport) =
+    withContext(Dispatchers.IO) {
+        val values = ContentValues().apply {
+            put(MediaStore.MediaColumns.DISPLAY_NAME, export.fileName)
+            put(MediaStore.MediaColumns.MIME_TYPE, "application/epub+zip")
+            put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+            put(MediaStore.MediaColumns.IS_PENDING, 1)
+        }
 
-private suspend fun saveEpubToDownloads(context: android.content.Context, export: EpubExport) = withContext(Dispatchers.IO) {
-    val values = ContentValues().apply {
-        put(MediaStore.MediaColumns.DISPLAY_NAME, export.fileName)
-        put(MediaStore.MediaColumns.MIME_TYPE, "application/epub+zip")
-        put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
-        put(MediaStore.MediaColumns.IS_PENDING, 1)
+        val resolver = context.contentResolver
+        val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+            ?: throw IOException("无法创建下载文件")
+        runCatching {
+            resolver.openOutputStream(uri)?.use { stream ->
+                stream.write(export.bytes)
+                stream.flush()
+            } ?: throw IOException("无法打开下载文件")
+            values.clear()
+            values.put(MediaStore.MediaColumns.IS_PENDING, 0)
+            resolver.update(uri, values, null, null)
+        }.onFailure {
+            resolver.delete(uri, null, null)
+            throw it
+        }
     }
-
-    val resolver = context.contentResolver
-    val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
-        ?: throw IOException("无法创建下载文件")
-    runCatching {
-        resolver.openOutputStream(uri)?.use { stream ->
-            stream.write(export.bytes)
-            stream.flush()
-        } ?: throw IOException("无法打开下载文件")
-        values.clear()
-        values.put(MediaStore.MediaColumns.IS_PENDING, 0)
-        resolver.update(uri, values, null, null)
-    }.onFailure {
-        resolver.delete(uri, null, null)
-        throw it
-    }
-}
