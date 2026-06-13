@@ -2859,14 +2859,27 @@ private fun ReaderCommentsSection(
             placeholder = { Text("发表评论") },
             trailingIcon = {
                 Box(modifier = Modifier.fillMaxHeight()) {
-                    IconButton(
-                        modifier = Modifier.align(Alignment.BottomCenter),
-                        onClick = onSubmit) {
-                        Icon(
-                            imageVector = Icons.Filled.AddComment,
-                            contentDescription = "发送",
-                            tint = colors.accent
+                    if (posting) {
+                        CircularProgressIndicator(
+                            modifier = Modifier
+                                .align(Alignment.BottomCenter)
+                                .padding(bottom = 12.dp)
+                                .size(22.dp),
+                            strokeWidth = 2.dp,
+                            color = colors.accent,
                         )
+                    } else {
+                        IconButton(
+                            modifier = Modifier.align(Alignment.BottomCenter),
+                            enabled = input.isNotBlank(),
+                            onClick = onSubmit,
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.AddComment,
+                                contentDescription = "发送",
+                                tint = if (input.isNotBlank()) colors.accent else colors.disabledText,
+                            )
+                        }
                     }
                 }
             }

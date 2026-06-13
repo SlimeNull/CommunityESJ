@@ -295,7 +295,7 @@ class EsjRepository(context: Context) {
             .build()
         val response = executeText(
             baseRequest(siteUrl("/inc/forum_reply.php"))
-                .header("authorization", authToken)
+                .header("Authorization", authToken)
                 .post(body)
                 .build(),
         )
