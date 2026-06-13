@@ -148,15 +148,7 @@ class EsjRepository(context: Context) {
     suspend fun login(email: String, password: String): LoginResult = withContext(Dispatchers.IO) {
         cookieJar.clear()
 
-        val tokenBody = FormBody.Builder()
-            .add("plxf", "getAuthToken")
-            .build()
-        val tokenRequest = baseRequest(siteUrl("/my/login"))
-            .post(tokenBody)
-            .build()
-        val tokenResponse = executeText(tokenRequest, checkSession = false)
-        EsjParser.parseAuthToken(tokenResponse)
-            ?: throw IOException("登录令牌响应格式不正确")
+        fetchAuthToken(siteUrl("/my/login"), "登录令牌响应格式不正确")
 
         val loginBody = FormBody.Builder()
             .add("email", email)
@@ -291,6 +283,8 @@ class EsjRepository(context: Context) {
             throw IOException("评论内容不能为空")
         }
         val forumId = forumIdFromUrl(chapter.url) ?: throw IOException("无法识别章节 ID")
+        val currentUrl = currentHostUrl(chapter.url)
+        val authToken = fetchAuthToken(currentUrl, "评论令牌响应格式不正确")
         val htmlContent = text
             .split('\n')
             .joinToString("<br>") { it.htmlEscape() }
@@ -301,6 +295,7 @@ class EsjRepository(context: Context) {
             .build()
         val response = executeText(
             baseRequest(siteUrl("/inc/forum_reply.php"))
+                .header("authorization", authToken)
                 .post(body)
                 .build(),
         )
@@ -480,6 +475,20 @@ class EsjRepository(context: Context) {
             .header("Accept", "text/html,application/xhtml+xml,application/xml,application/json;q=0.9,*/*;q=0.8")
             .header("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
             .header("Referer", "${selectedHost.baseUrl}/")
+    }
+
+    private fun fetchAuthToken(url: String, errorMessage: String): String {
+        val tokenBody = FormBody.Builder()
+            .add("plxf", "getAuthToken")
+            .build()
+        val tokenResponse = executeText(
+            baseRequest(url)
+                .post(tokenBody)
+                .build(),
+            checkSession = false,
+        )
+        return EsjParser.parseAuthToken(tokenResponse)
+            ?: throw IOException(errorMessage)
     }
 
     private fun siteUrl(path: String): String {

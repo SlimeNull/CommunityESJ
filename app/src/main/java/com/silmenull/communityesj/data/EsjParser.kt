@@ -148,8 +148,9 @@ object EsjParser {
             val username = comment.selectFirst(".comment-title a")?.text()?.cleanText().orEmpty()
             if (username.isBlank()) return@mapNotNull null
 
-            val commentText = comment.selectFirst(".comment-text") ?: return@mapNotNull null
-            val quoteBlocks = commentText.select("blockquote")
+            val commentBody = comment.selectFirst(".comment-body") ?: return@mapNotNull null
+            val commentText = commentBody.selectFirst(".comment-text") ?: return@mapNotNull null
+            val quoteBlocks = commentBody.select("blockquote")
                 .flatMap { blockquote -> parseCommentBlocks(blockquote) }
             val contentBlocks = commentText.select("p")
                 .filter { paragraph -> paragraph.parents().none { it.tagName().equals("blockquote", ignoreCase = true) } }
