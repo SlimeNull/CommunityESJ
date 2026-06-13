@@ -28,6 +28,7 @@ class LocalStore(context: Context) {
         val json = JSONObject()
             .put("currentPage", page.currentPage)
             .put("totalPages", page.totalPages)
+            .put("username", page.username)
             .put("books", JSONArray(page.books.map { it.toJson() }))
         writeJson("bookshelf-v1", page.currentPage.toString(), json)
     }
@@ -51,6 +52,7 @@ class LocalStore(context: Context) {
             books = books,
             currentPage = json.optInt("currentPage", page).coerceAtLeast(1),
             totalPages = json.optInt("totalPages", page).coerceAtLeast(1),
+            username = json.optString("username"),
         )
     }
 
@@ -340,12 +342,14 @@ class LocalStore(context: Context) {
             .put("previousUrl", previousUrl)
             .put("nextUrl", nextUrl)
             .put("detailUrl", detailUrl)
+            .put("comments", JSONArray(comments.map { it.toJson() }))
     }
 
     private fun JSONObject.toReaderChapter(): ReaderChapter {
         val chapterArray = optJSONArray("chapters") ?: JSONArray()
         val blockArray = optJSONArray("contentBlocks")
         val legacyParagraphArray = optJSONArray("paragraphs")
+        val commentArray = optJSONArray("comments") ?: JSONArray()
 
         return ReaderChapter(
             url = optString("url"),
@@ -365,6 +369,11 @@ class LocalStore(context: Context) {
             previousUrl = optString("previousUrl").takeIf { it.isNotBlank() && it != "null" },
             nextUrl = optString("nextUrl").takeIf { it.isNotBlank() && it != "null" },
             detailUrl = optString("detailUrl").takeIf { it.isNotBlank() && it != "null" },
+            comments = buildList {
+                for (index in 0 until commentArray.length()) {
+                    commentArray.optJSONObject(index)?.toReaderComment()?.let(::add)
+                }
+            },
         )
     }
 
@@ -405,6 +414,67 @@ class LocalStore(context: Context) {
                 paragraphs.optString(index)
                     .takeIf { it.isNotBlank() }
                     ?.let { add(ReaderContentBlock.Text(it)) }
+            }
+        }
+    }
+
+    private fun ReaderComment.toJson(): JSONObject {
+        return JSONObject()
+            .put("id", id)
+            .put("username", username)
+            .put("content", JSONArray(content.map { it.toJson() }))
+            .put("quote", JSONArray(quote.map { it.toJson() }))
+    }
+
+    private fun JSONObject.toReaderComment(): ReaderComment? {
+        val username = optString("username")
+        if (username.isBlank()) return null
+        return ReaderComment(
+            id = optString("id"),
+            username = username,
+            content = readCommentBlocks(optJSONArray("content")),
+            quote = readCommentBlocks(optJSONArray("quote")),
+        )
+    }
+
+    private fun CommentBlock.toJson(): JSONObject {
+        return JSONObject()
+            .put("parts", JSONArray(parts.map { it.toJson() }))
+    }
+
+    private fun CommentTextPart.toJson(): JSONObject {
+        return JSONObject()
+            .put("text", text)
+            .put("strikeThrough", strikeThrough)
+    }
+
+    private fun readCommentBlocks(array: JSONArray?): List<CommentBlock> {
+        val blockArray = array ?: return emptyList()
+        return buildList {
+            for (index in 0 until blockArray.length()) {
+                val item = blockArray.optJSONObject(index) ?: continue
+                val parts = readCommentParts(item.optJSONArray("parts"))
+                if (parts.isNotEmpty()) {
+                    add(CommentBlock(parts))
+                }
+            }
+        }
+    }
+
+    private fun readCommentParts(array: JSONArray?): List<CommentTextPart> {
+        val partArray = array ?: return emptyList()
+        return buildList {
+            for (index in 0 until partArray.length()) {
+                val item = partArray.optJSONObject(index) ?: continue
+                val text = item.optString("text")
+                if (text.isNotBlank()) {
+                    add(
+                        CommentTextPart(
+                            text = text,
+                            strikeThrough = item.optBoolean("strikeThrough"),
+                        ),
+                    )
+                }
             }
         }
     }

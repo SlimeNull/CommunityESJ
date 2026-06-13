@@ -34,6 +34,7 @@ object EsjParser {
             books = books,
             currentPage = page,
             totalPages = parseTotalPages(doc).coerceAtLeast(page),
+            username = doc.selectFirst(".user-data h4")?.text()?.cleanText().orEmpty(),
         )
     }
 
@@ -78,6 +79,7 @@ object EsjParser {
         val next = doc.selectFirst(".entry-navigation .btn-next[href], a.btn-next[href]")
             ?.absUrl("href")
             ?.takeIf { it.isNotBlank() }
+        val comments = parseComments(doc)
 
         return ReaderChapter(
             url = fallbackUrl,
@@ -88,6 +90,7 @@ object EsjParser {
             previousUrl = previous,
             nextUrl = next,
             detailUrl = detailUrl,
+            comments = comments,
         )
     }
 
@@ -138,6 +141,90 @@ object EsjParser {
             .split('\n')
             .mapNotNull { it.cleanText().takeIf(String::isNotBlank) }
             .map { ReaderContentBlock.Text(it) }
+    }
+
+    private fun parseComments(doc: Document): List<ReaderComment> {
+        return doc.select("#comments .comment").mapNotNull { comment ->
+            val username = comment.selectFirst(".comment-title a")?.text()?.cleanText().orEmpty()
+            if (username.isBlank()) return@mapNotNull null
+
+            val commentText = comment.selectFirst(".comment-text") ?: return@mapNotNull null
+            val quoteBlocks = commentText.select("blockquote")
+                .flatMap { blockquote -> parseCommentBlocks(blockquote) }
+            val contentBlocks = commentText.select("p")
+                .filter { paragraph -> paragraph.parents().none { it.tagName().equals("blockquote", ignoreCase = true) } }
+                .flatMap { paragraph -> parseCommentBlocks(paragraph) }
+                .ifEmpty {
+                    val clone = commentText.clone()
+                    clone.select("blockquote").remove()
+                    parseCommentBlocks(clone)
+                }
+
+            ReaderComment(
+                id = comment.id().takeIf { it.isNotBlank() }.orEmpty(),
+                username = username,
+                content = contentBlocks,
+                quote = quoteBlocks,
+            )
+        }
+    }
+
+    private fun parseCommentBlocks(element: Element): List<CommentBlock> {
+        val blocks = mutableListOf<CommentBlock>()
+        val parts = mutableListOf<CommentTextPart>()
+
+        fun flush() {
+            val normalized = normalizeCommentParts(parts)
+            if (normalized.isNotEmpty()) {
+                blocks.add(CommentBlock(normalized))
+            }
+            parts.clear()
+        }
+
+        fun collect(node: Node, strikeThrough: Boolean) {
+            when (node) {
+                is TextNode -> {
+                    val text = node.wholeText
+                        .replace('\u00A0', ' ')
+                        .replace(Regex("""[ \t\r\n]+"""), " ")
+                    if (text.isNotBlank()) {
+                        parts.add(CommentTextPart(text, strikeThrough))
+                    }
+                }
+
+                is Element -> when (node.tagName().lowercase()) {
+                    "br" -> flush()
+                    "p" -> {
+                        if (parts.isNotEmpty()) flush()
+                        node.childNodes().forEach { child -> collect(child, strikeThrough) }
+                        flush()
+                    }
+                    "blockquote" -> Unit
+                    "s", "strike", "del" -> node.childNodes().forEach { child -> collect(child, true) }
+                    else -> node.childNodes().forEach { child -> collect(child, strikeThrough) }
+                }
+            }
+        }
+
+        element.childNodes().forEach { node -> collect(node, false) }
+        flush()
+        return blocks
+    }
+
+    private fun normalizeCommentParts(parts: List<CommentTextPart>): List<CommentTextPart> {
+        return buildList {
+            parts.forEach { part ->
+                val text = part.text.cleanText()
+                if (text.isBlank()) return@forEach
+                val previous = lastOrNull()
+                if (previous != null && previous.strikeThrough == part.strikeThrough) {
+                    removeAt(lastIndex)
+                    add(previous.copy(text = "${previous.text} $text".cleanText()))
+                } else {
+                    add(part.copy(text = text))
+                }
+            }
+        }
     }
 
     private fun collectContentNode(node: Node, state: ContentParseState) {

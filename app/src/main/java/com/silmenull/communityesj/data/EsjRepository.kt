@@ -141,6 +141,10 @@ class EsjRepository(context: Context) {
         )
     }
 
+    fun currentUsername(): String {
+        return cachedBookshelf(1)?.username.orEmpty()
+    }
+
     suspend fun login(email: String, password: String): LoginResult = withContext(Dispatchers.IO) {
         cookieJar.clear()
 
@@ -281,6 +285,44 @@ class EsjRepository(context: Context) {
         chapter
     }
 
+    suspend fun postComment(chapter: ReaderChapter, content: String): ReaderComment = withContext(Dispatchers.IO) {
+        val text = content.trim()
+        if (text.isBlank()) {
+            throw IOException("评论内容不能为空")
+        }
+        val forumId = forumIdFromUrl(chapter.url) ?: throw IOException("无法识别章节 ID")
+        val htmlContent = text
+            .split('\n')
+            .joinToString("<br>") { it.htmlEscape() }
+        val body = FormBody.Builder()
+            .add("content", htmlContent)
+            .add("data", "forum")
+            .add("forum_id", forumId)
+            .build()
+        val response = executeText(
+            baseRequest(siteUrl("/inc/forum_reply.php"))
+                .post(body)
+                .build(),
+        )
+        val json = runCatching { JSONObject(response) }.getOrNull()
+        val status = json?.optInt("status") ?: 0
+        if (status != 200) {
+            throw IOException(json?.optString("msg")?.takeIf { it.isNotBlank() } ?: "服务器返回：$response")
+        }
+
+        val comment = ReaderComment(
+            id = json?.optString("anchor")?.removePrefix("#").orEmpty(),
+            username = currentUsername().ifBlank { "我" },
+            content = listOf(
+                CommentBlock(
+                    parts = listOf(CommentTextPart(text)),
+                ),
+            ),
+        )
+        store.saveChapter(chapter.copy(comments = chapter.comments + comment))
+        comment
+    }
+
     suspend fun loadChapters(detailUrl: String, forceRefresh: Boolean = false): List<ChapterLink> = withContext(Dispatchers.IO) {
         if (!forceRefresh) {
             store.getChapters(detailUrl)?.let { return@withContext markCached(it) }
@@ -378,6 +420,13 @@ class EsjRepository(context: Context) {
         val firstUrl = chapters.firstOrNull()?.url ?: return null
         val match = Regex("""/forum/(\d+)/""").find(firstUrl) ?: return null
         return siteUrl("/detail/${match.groupValues[1]}.html")
+    }
+
+    private fun forumIdFromUrl(url: String): String? {
+        return Regex("""/forum/\d+/(\d+)\.html(?:[?#].*)?$""")
+            .find(url)
+            ?.groupValues
+            ?.getOrNull(1)
     }
 
     private fun markCached(chapters: List<ChapterLink>): List<ChapterLink> {
@@ -633,5 +682,9 @@ class EsjRepository(context: Context) {
             .replace(">", "&gt;")
             .replace("\"", "&quot;")
             .replace("'", "&apos;")
+    }
+
+    private fun String.htmlEscape(): String {
+        return xmlEscape()
     }
 }

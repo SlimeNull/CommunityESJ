@@ -4,6 +4,7 @@ data class BookshelfPage(
     val books: List<BookItem>,
     val currentPage: Int,
     val totalPages: Int,
+    val username: String = "",
 )
 
 data class BookItem(
@@ -31,10 +32,27 @@ data class ReaderChapter(
     val previousUrl: String?,
     val nextUrl: String?,
     val detailUrl: String?,
+    val comments: List<ReaderComment> = emptyList(),
 ) {
     val paragraphs: List<String>
         get() = contentBlocks.mapNotNull { (it as? ReaderContentBlock.Text)?.text }
 }
+
+data class ReaderComment(
+    val id: String,
+    val username: String,
+    val content: List<CommentBlock>,
+    val quote: List<CommentBlock> = emptyList(),
+)
+
+data class CommentBlock(
+    val parts: List<CommentTextPart>,
+)
+
+data class CommentTextPart(
+    val text: String,
+    val strikeThrough: Boolean = false,
+)
 
 sealed interface ReaderContentBlock {
     data class Text(val text: String) : ReaderContentBlock

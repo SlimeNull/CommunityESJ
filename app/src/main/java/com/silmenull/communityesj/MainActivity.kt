@@ -109,6 +109,7 @@ import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.ui.text.SpanStyle
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
@@ -120,6 +121,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
@@ -142,6 +144,7 @@ import androidx.compose.ui.platform.LocalAutofillTree
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -157,12 +160,15 @@ import com.silmenull.communityesj.data.BookItem
 import com.silmenull.communityesj.data.BookCacheProgress
 import com.silmenull.communityesj.data.BookshelfPage
 import com.silmenull.communityesj.data.ChapterLink
+import com.silmenull.communityesj.data.CommentBlock
+import com.silmenull.communityesj.data.CommentTextPart
 import com.silmenull.communityesj.data.EsjRepository
 import com.silmenull.communityesj.data.EsjHost
 import com.silmenull.communityesj.data.EpubExport
 import com.silmenull.communityesj.data.LoginExpiredException
 import com.silmenull.communityesj.data.LoginSessionState
 import com.silmenull.communityesj.data.ReaderChapter
+import com.silmenull.communityesj.data.ReaderComment
 import com.silmenull.communityesj.data.ReaderContentBlock
 import com.silmenull.communityesj.data.ReaderFontFamily
 import com.silmenull.communityesj.data.ReaderLayoutSettings
@@ -359,6 +365,8 @@ private class AppState(
     var readerInitialProgress by mutableFloatStateOf(0f)
     var readerScrollProgress by mutableFloatStateOf(0f)
     var readerControlsVisible by mutableStateOf(false)
+    var readerChaptersRefreshing by mutableStateOf(false)
+    var readerCommentPosting by mutableStateOf(false)
     var readerLightThemePreset by mutableStateOf(repository.readerLightThemePreset())
     var readerDarkThemePreset by mutableStateOf(repository.readerDarkThemePreset())
     var readerLayoutSettings by mutableStateOf(repository.readerLayoutSettings())
@@ -683,7 +691,7 @@ private fun EsjReaderApp(
             return
         }
         scope.launch {
-            appState.isLoading = true
+            appState.readerChaptersRefreshing = true
             runCatching {
                 appState.repository.refreshChapters(detailUrl)
             }.onSuccess { chapters ->
@@ -694,7 +702,28 @@ private fun EsjReaderApp(
                 }
                 showFeedback(error.userMessage("刷新目录失败"))
             }
-            appState.isLoading = false
+            appState.readerChaptersRefreshing = false
+        }
+    }
+
+    fun postReaderComment(content: String) {
+        val chapter = appState.readerChapter ?: return
+        scope.launch {
+            appState.readerCommentPosting = true
+            runCatching {
+                appState.repository.postComment(chapter, content)
+            }.onSuccess { comment ->
+                appState.readerChapter = appState.readerChapter?.copy(
+                    comments = appState.readerChapter?.comments.orEmpty() + comment,
+                )
+                showFeedback("评论成功")
+            }.onFailure { error ->
+                if (error is LoginExpiredException) {
+                    appState.repository.expireLogin()
+                }
+                showFeedback(error.userMessage("评论失败"), forceDialog = true)
+            }
+            appState.readerCommentPosting = false
         }
     }
 
@@ -933,8 +962,11 @@ private fun EsjReaderApp(
                     },
                     cacheProgress = (appState.readerChapter?.detailUrl ?: screen.detailUrlHint)
                         ?.let(appState.cacheProgress::get),
+                    chaptersRefreshing = appState.readerChaptersRefreshing,
+                    commentPosting = appState.readerCommentPosting,
                     onCacheWholeBook = ::cacheWholeCurrentBook,
                     onRefreshChapters = ::refreshCurrentBookChapters,
+                    onPostComment = ::postReaderComment,
                     onSystemBarsState = { readerBarsState = it },
                     onFeedback = ::showFeedback,
                     onReaderShortcutHandlerChange = onReaderShortcutHandlerChange,
@@ -1069,6 +1101,8 @@ private fun LoginScreen(
     var password by remember { mutableStateOf(rememberedLogin.password) }
     val canSubmit = !isLoading && email.isNotBlank() && password.isNotBlank()
     val view = LocalView.current
+
+    val balabala by remember { derivedStateOf { email + password }}
 
     DisposableEffect(view) {
         val previous = view.importantForAutofill
@@ -2144,14 +2178,18 @@ private fun ReaderScreen(
     controlsVisible: Boolean,
     onControlsVisibleChange: (Boolean) -> Unit,
     cacheProgress: BookCacheProgress?,
+    chaptersRefreshing: Boolean,
+    commentPosting: Boolean,
     onCacheWholeBook: () -> Unit,
     onRefreshChapters: () -> Unit,
+    onPostComment: (String) -> Unit,
     onSystemBarsState: (ReaderSystemBarsState) -> Unit,
     onFeedback: (String, Boolean) -> Unit,
     onReaderShortcutHandlerChange: (((ReaderShortcutDirection) -> Boolean)?) -> Unit,
 ) {
     var chapterSheetVisible by remember { mutableStateOf(false) }
     var imageViewerUrl by remember { mutableStateOf<String?>(null) }
+    var commentInput by remember(chapter?.url) { mutableStateOf("") }
     val listState = rememberLazyListState()
     val chapterListState = rememberLazyListState()
     val interactionSource = remember { MutableInteractionSource() }
@@ -2337,6 +2375,22 @@ private fun ReaderScreen(
                             )
                         }
                     }
+                    item {
+                        ReaderCommentsSection(
+                            comments = chapter.comments,
+                            input = commentInput,
+                            posting = commentPosting,
+                            colors = colors,
+                            onInputChange = { commentInput = it },
+                            onSubmit = {
+                                val text = commentInput.trim()
+                                if (text.isNotBlank()) {
+                                    commentInput = ""
+                                    onPostComment(text)
+                                }
+                            },
+                        )
+                    }
                 }
                 LazyListScrollbar(
                     state = listState,
@@ -2425,11 +2479,21 @@ private fun ReaderScreen(
                             style = MaterialTheme.typography.titleLarge,
                             fontWeight = FontWeight.Bold,
                         )
-                        IconButton(onClick = onRefreshChapters) {
-                            Icon(
-                                imageVector = Icons.Filled.Refresh,
-                                contentDescription = "刷新目录",
-                            )
+                        IconButton(
+                            onClick = onRefreshChapters,
+                            enabled = !chaptersRefreshing,
+                        ) {
+                            if (chaptersRefreshing) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(22.dp),
+                                    strokeWidth = 2.dp,
+                                )
+                            } else {
+                                Icon(
+                                    imageVector = Icons.Filled.Refresh,
+                                    contentDescription = "刷新目录",
+                                )
+                            }
                         }
                     }
                     if (chapter?.chapters.isNullOrEmpty()) {
@@ -2742,6 +2806,160 @@ private fun NextChapterFooterButton(
             color = colors.accent,
             textDecoration = TextDecoration.Underline,
         )
+    }
+}
+
+@Composable
+private fun ReaderCommentsSection(
+    comments: List<ReaderComment>,
+    input: String,
+    posting: Boolean,
+    colors: ReaderColors,
+    onInputChange: (String) -> Unit,
+    onSubmit: () -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 24.dp, bottom = 12.dp),
+    ) {
+        HorizontalDivider(color = colors.disabled.copy(alpha = 0.7f))
+        Text(
+            text = "评论",
+            modifier = Modifier.padding(top = 18.dp),
+            color = colors.text,
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.SemiBold,
+        )
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            OutlinedTextField(
+                value = input,
+                onValueChange = onInputChange,
+                modifier = Modifier.weight(1f),
+                enabled = !posting,
+                minLines = 1,
+                maxLines = 4,
+                placeholder = { Text("发表评论") },
+            )
+            Button(
+                onClick = onSubmit,
+                enabled = !posting && input.isNotBlank(),
+                shape = RoundedCornerShape(8.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = colors.accent,
+                    contentColor = Color.White,
+                    disabledContainerColor = colors.disabled,
+                    disabledContentColor = colors.disabledText,
+                ),
+            ) {
+                if (posting) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(18.dp),
+                        strokeWidth = 2.dp,
+                        color = colors.disabledText,
+                    )
+                } else {
+                    Text("发送")
+                }
+            }
+        }
+
+        if (comments.isEmpty()) {
+            Text(
+                text = "暂无评论",
+                modifier = Modifier.padding(top = 18.dp),
+                color = colors.mutedText,
+                fontSize = 14.sp,
+            )
+        } else {
+            comments.forEach { comment ->
+                ReaderCommentRow(
+                    comment = comment,
+                    colors = colors,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ReaderCommentRow(
+    comment: ReaderComment,
+    colors: ReaderColors,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 18.dp),
+    ) {
+        Text(
+            text = comment.username,
+            color = colors.accent,
+            fontWeight = FontWeight.SemiBold,
+            fontSize = 14.sp,
+        )
+        if (comment.quote.isNotEmpty()) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 8.dp)
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(colors.disabled.copy(alpha = 0.34f))
+                    .padding(horizontal = 10.dp, vertical = 8.dp),
+            ) {
+                comment.quote.forEach { block ->
+                    CommentBlockText(
+                        block = block,
+                        color = colors.mutedText,
+                        fontSize = 13.sp,
+                    )
+                }
+            }
+        }
+        comment.content.forEach { block ->
+            CommentBlockText(
+                block = block,
+                color = colors.text,
+                fontSize = 14.sp,
+                modifier = Modifier.padding(top = 6.dp),
+            )
+        }
+    }
+}
+
+@Composable
+private fun CommentBlockText(
+    block: CommentBlock,
+    color: Color,
+    fontSize: androidx.compose.ui.unit.TextUnit,
+    modifier: Modifier = Modifier,
+) {
+    Text(
+        text = block.toAnnotatedString(),
+        modifier = modifier.fillMaxWidth(),
+        color = color,
+        fontSize = fontSize,
+        lineHeight = (fontSize.value * 1.55f).sp,
+    )
+}
+
+private fun CommentBlock.toAnnotatedString() = buildAnnotatedString {
+    parts.forEach { part ->
+        val start = length
+        append(part.text)
+        if (part.strikeThrough) {
+            addStyle(
+                style = SpanStyle(textDecoration = TextDecoration.LineThrough),
+                start = start,
+                end = length,
+            )
+        }
     }
 }
 
