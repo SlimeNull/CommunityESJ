@@ -163,6 +163,7 @@ import com.silmenull.communityesj.data.BookCacheProgress
 import com.silmenull.communityesj.data.BookshelfPage
 import com.silmenull.communityesj.data.ChapterLink
 import com.silmenull.communityesj.data.CommentBlock
+import com.silmenull.communityesj.data.CommentRequiresRefreshException
 import com.silmenull.communityesj.data.CommentTextPart
 import com.silmenull.communityesj.data.EsjRepository
 import com.silmenull.communityesj.data.EsjHost
@@ -724,11 +725,29 @@ private fun EsjReaderApp(
 
     fun postReaderComment(content: String) {
         val chapter = appState.readerChapter ?: return
+
+        suspend fun submit(targetChapter: ReaderChapter): Result<ReaderComment> {
+            return runCatching {
+                appState.repository.postComment(targetChapter, content)
+            }
+        }
+
         scope.launch {
             appState.readerCommentPosting = true
-            runCatching {
-                appState.repository.postComment(chapter, content)
-            }.onSuccess { comment ->
+            var result = submit(chapter)
+            if (result.exceptionOrNull() is CommentRequiresRefreshException) {
+                result = runCatching {
+                    val refreshed = appState.repository.loadReader(
+                        url = chapter.url,
+                        detailUrlHint = chapter.detailUrl,
+                        forceRefresh = true,
+                    )
+                    appState.readerChapter = refreshed
+                    appState.repository.postComment(refreshed, content)
+                }
+            }
+
+            result.onSuccess { comment ->
                 appState.readerChapter = appState.readerChapter?.copy(
                     comments = appState.readerChapter?.comments.orEmpty() + comment,
                 )

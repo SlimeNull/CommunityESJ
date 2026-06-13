@@ -17,6 +17,8 @@ import java.util.zip.ZipOutputStream
 
 class LoginExpiredException : IOException("登录凭证已失效,请重新登录")
 
+class CommentRequiresRefreshException : IOException("评论状态已过期，需要刷新章节")
+
 class EsjRepository(context: Context) {
     private val store = LocalStore(context.applicationContext)
     private var selectedHost = store.getHost()
@@ -301,6 +303,9 @@ class EsjRepository(context: Context) {
         )
         val json = runCatching { JSONObject(response) }.getOrNull()
         val status = json?.optInt("status") ?: 0
+        if (status == 301) {
+            throw CommentRequiresRefreshException()
+        }
         if (status != 200) {
             throw IOException(json?.optString("msg")?.takeIf { it.isNotBlank() } ?: "服务器返回：$response")
         }
