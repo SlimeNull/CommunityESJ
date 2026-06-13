@@ -2269,9 +2269,8 @@ private fun ReaderScreen(
                 if (isCommentTextFillFocused) {
                     focusManager.clearFocus()
                 }
-                if (controlsVisible) {
-                    onControlsVisibleChange(false)
-                }
+
+                onControlsVisibleChange(false)
             }
         }
     }
