@@ -136,6 +136,7 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -1079,6 +1080,8 @@ private fun ApplySystemBars(readerState: ReaderSystemBarsState?) {
     val context = LocalContext.current
     val activity = remember(context) { context.findActivity() }
     val window = activity?.window
+    val appStatusBarColor = MaterialTheme.colorScheme.surface
+    val appLightStatusBars = appStatusBarColor.luminance() > 0.5f
     val decorView = window?.decorView
     val controller = if (window != null && decorView != null) {
         WindowCompat.getInsetsController(window, decorView)
@@ -1086,16 +1089,28 @@ private fun ApplySystemBars(readerState: ReaderSystemBarsState?) {
         null
     }
 
-    LaunchedEffect(window, controller, readerState) {
+    LaunchedEffect(window, controller, readerState, appStatusBarColor, appLightStatusBars) {
         if (window != null && controller != null) {
-            applySystemBars(window, controller, readerState)
+            applySystemBars(
+                window = window,
+                controller = controller,
+                readerState = readerState,
+                appStatusBarColor = appStatusBarColor.toArgb(),
+                appLightStatusBars = appLightStatusBars,
+            )
         }
     }
 
-    DisposableEffect(window, controller) {
+    DisposableEffect(window, controller, appStatusBarColor, appLightStatusBars) {
         onDispose {
             if (window != null && controller != null) {
-                applySystemBars(window, controller, null)
+                applySystemBars(
+                    window = window,
+                    controller = controller,
+                    readerState = null,
+                    appStatusBarColor = appStatusBarColor.toArgb(),
+                    appLightStatusBars = appLightStatusBars,
+                )
             }
         }
     }
@@ -1114,14 +1129,16 @@ private fun applySystemBars(
     window: Window,
     controller: WindowInsetsControllerCompat,
     readerState: ReaderSystemBarsState?,
+    appStatusBarColor: Int,
+    appLightStatusBars: Boolean,
 ) {
     controller.systemBarsBehavior =
         WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
 
     if (readerState == null) {
         controller.show(WindowInsetsCompat.Type.statusBars())
-        controller.isAppearanceLightStatusBars = true
-        window.statusBarColor = Color.Transparent.toArgb()
+        controller.isAppearanceLightStatusBars = appLightStatusBars
+        window.statusBarColor = appStatusBarColor
         return
     }
 
