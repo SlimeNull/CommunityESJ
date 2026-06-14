@@ -2072,14 +2072,6 @@ private fun ReaderThemePresetCard(
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
-        if (selected) {
-            Text(
-                text = "当前",
-                color = MaterialTheme.colorScheme.primary,
-                fontSize = 11.sp,
-                fontWeight = FontWeight.SemiBold,
-            )
-        }
     }
 }
 
