@@ -87,6 +87,9 @@ data class ReaderLayoutSettings(
     val horizontalPaddingDp: Float = 22f,
     val shortcutPageTurnPercent: Float = 0.8f,
     val shortcutAnimationMillis: Int = 300,
+    val hideComments: Boolean = false,
+    val textConversion: TextConversion = TextConversion.ORIGINAL,
+    val disableCache: Boolean = false,
 )
 
 data class EpubExport(
@@ -105,6 +108,20 @@ enum class ReaderFontFamily(
     companion object {
         fun fromName(name: String?): ReaderFontFamily {
             return entries.firstOrNull { it.name == name } ?: SYSTEM
+        }
+    }
+}
+
+enum class TextConversion(
+    val displayName: String,
+) {
+    ORIGINAL("原文"),
+    SIMPLIFIED("转为简体"),
+    TRADITIONAL("转为繁体");
+
+    companion object {
+        fun fromName(name: String?): TextConversion {
+            return entries.firstOrNull { it.name == name } ?: ORIGINAL
         }
     }
 }

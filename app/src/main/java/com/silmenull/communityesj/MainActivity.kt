@@ -8,6 +8,7 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.graphics.Bitmap
 import android.graphics.drawable.BitmapDrawable
+import android.icu.text.Transliterator
 import android.media.session.MediaSession
 import android.media.session.PlaybackState
 import android.provider.MediaStore
@@ -178,6 +179,7 @@ import com.silmenull.communityesj.data.ReaderLayoutSettings
 import com.silmenull.communityesj.data.ReaderThemePreset
 import com.silmenull.communityesj.data.RememberedLogin
 import com.silmenull.communityesj.data.ReadingProgress
+import com.silmenull.communityesj.data.TextConversion
 import com.silmenull.communityesj.ui.theme.CommunityESJTheme
 import coil.compose.SubcomposeAsyncImage
 import coil.imageLoader
@@ -455,6 +457,7 @@ private fun EsjReaderApp(
     }
 
     fun showCachedBookshelf(page: Int = 1): Boolean {
+        if (appState.readerLayoutSettings.disableCache) return false
         val cached = appState.repository.cachedBookshelf(page) ?: return false
         appState.bookshelf = cached
         appState.currentPage = cached.currentPage
@@ -505,8 +508,11 @@ private fun EsjReaderApp(
             Screen.Login -> {
                 if (appState.repository.hasLoggedInBefore()) {
                     appState.screen = Screen.Bookshelf
-                    appState.bookshelf =
+                    appState.bookshelf = if (appState.readerLayoutSettings.disableCache) {
+                        BookshelfPage(emptyList(), 1, 1)
+                    } else {
                         appState.repository.cachedBookshelf(1) ?: BookshelfPage(emptyList(), 1, 1)
+                    }
                     syncBookshelfCacheProgress(appState.bookshelf)
                     appState.currentPage = 1
                 }
@@ -515,8 +521,11 @@ private fun EsjReaderApp(
             Screen.Bookshelf, Screen.Settings -> {
                 appState.screen = Screen.Bookshelf
                 appState.readerChapter = null
-                appState.bookshelf =
+                appState.bookshelf = if (appState.readerLayoutSettings.disableCache) {
+                    BookshelfPage(emptyList(), 1, 1)
+                } else {
                     appState.repository.cachedBookshelf(1) ?: BookshelfPage(emptyList(), 1, 1)
+                }
                 syncBookshelfCacheProgress(appState.bookshelf)
                 appState.currentPage = 1
             }
@@ -549,7 +558,11 @@ private fun EsjReaderApp(
                 if (loginExpired) {
                     appState.repository.expireLogin()
                 }
-                val cached = appState.repository.cachedBookshelf(page)
+                val cached = if (appState.readerLayoutSettings.disableCache) {
+                    null
+                } else {
+                    appState.repository.cachedBookshelf(page)
+                }
                 if (cached != null) {
                     appState.bookshelf = cached
                     appState.currentPage = cached.currentPage
@@ -837,7 +850,7 @@ private fun EsjReaderApp(
                     isLoading = appState.isLoading,
                     currentHost = appState.selectedHost,
                     rememberedLogin = appState.rememberedLogin,
-                    showOfflineAction = appState.repository.hasAnyCachedBookshelf(),
+                    showOfflineAction = !appState.readerLayoutSettings.disableCache && appState.repository.hasAnyCachedBookshelf(),
                     onHostChange = ::switchHost,
                     onOffline = {
                         if (showCachedBookshelf(1)) {
@@ -1616,7 +1629,7 @@ private fun BookRow(
     var menuExpanded by remember { mutableStateOf(false) }
     val lastRead = localProgress?.chapterTitle
         ?.takeIf { it.isNotBlank() }
-        ?: book.lastReadChapter
+        .orEmpty()
     val updateText = remember(book.updateDate) { relativeUpdateText(book.updateDate) }
 
     Box {
@@ -1952,6 +1965,50 @@ private fun SettingsScreen(
             }
             item {
                 HorizontalDivider(modifier = Modifier.padding(vertical = 6.dp))
+                Text(
+                    text = "阅读内容",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
+            item {
+                SettingsSwitchRow(
+                    title = "隐藏评论区",
+                    subtitle = "阅读页不显示评论列表和发表评论入口",
+                    checked = readerLayoutSettings.hideComments,
+                    onCheckedChange = { enabled ->
+                        onReaderLayoutSettingsChange(readerLayoutSettings.copy(hideComments = enabled))
+                    },
+                )
+            }
+            item {
+                Text(
+                    text = "简繁切换",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 13.sp,
+                )
+            }
+            items(TextConversion.entries) { conversion ->
+                TextConversionRow(
+                    conversion = conversion,
+                    selected = conversion == readerLayoutSettings.textConversion,
+                    onClick = {
+                        onReaderLayoutSettingsChange(readerLayoutSettings.copy(textConversion = conversion))
+                    },
+                )
+            }
+            item {
+                SettingsSwitchRow(
+                    title = "禁用缓存",
+                    subtitle = "书架和阅读页总是从网页获取数据",
+                    checked = readerLayoutSettings.disableCache,
+                    onCheckedChange = { enabled ->
+                        onReaderLayoutSettingsChange(readerLayoutSettings.copy(disableCache = enabled))
+                    },
+                )
+            }
+            item {
+                HorizontalDivider(modifier = Modifier.padding(vertical = 6.dp))
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -2124,6 +2181,76 @@ private fun ReaderFontRow(
 }
 
 @Composable
+private fun TextConversionRow(
+    conversion: TextConversion,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(
+                if (selected) {
+                    MaterialTheme.colorScheme.primaryContainer
+                } else {
+                    Color.Transparent
+                },
+            )
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = conversion.displayName,
+            modifier = Modifier.weight(1f),
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+        )
+        if (selected) {
+            Text(
+                text = "当前",
+                color = MaterialTheme.colorScheme.primary,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+        }
+    }
+}
+
+@Composable
+private fun SettingsSwitchRow(
+    title: String,
+    subtitle: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .clickable { onCheckedChange(!checked) }
+            .padding(vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleMedium,
+            )
+            Text(
+                text = subtitle,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontSize = 13.sp,
+            )
+        }
+        Switch(
+            checked = checked,
+            onCheckedChange = onCheckedChange,
+        )
+    }
+}
+
+@Composable
 private fun ReaderSettingSlider(
     title: String,
     valueText: String,
@@ -2238,6 +2365,9 @@ private fun ReaderScreen(
     val chapterListState = rememberLazyListState()
     val interactionSource = remember { MutableInteractionSource() }
     val colors = readerColors(readerThemePreset)
+    val textConverter = remember(readerLayoutSettings.textConversion) {
+        ReaderTextConverter(readerLayoutSettings.textConversion)
+    }
     val readerFontSize = readerLayoutSettings.fontSizeSp.sp
     val readerLineHeight =
         (readerLayoutSettings.fontSizeSp * readerLayoutSettings.lineHeightMultiplier).sp
@@ -2398,14 +2528,14 @@ private fun ReaderScreen(
                 ) {
                     item {
                         Text(
-                            text = chapter.chapterTitle,
+                            text = textConverter.convert(chapter.chapterTitle),
                             style = MaterialTheme.typography.headlineSmall,
                             color = colors.text,
                             fontWeight = FontWeight.Bold,
                         )
                         if (chapter.bookTitle.isNotBlank()) {
                             Text(
-                                text = chapter.bookTitle,
+                                text = textConverter.convert(chapter.bookTitle),
                                 modifier = Modifier.padding(top = 8.dp, bottom = 24.dp),
                                 color = colors.mutedText,
                             )
@@ -2416,7 +2546,7 @@ private fun ReaderScreen(
                     items(chapter.contentBlocks) { block ->
                         when (block) {
                             is ReaderContentBlock.Text -> Text(
-                                text = block.text,
+                                text = textConverter.convert(block.text),
                                 modifier = Modifier.padding(bottom = readerLayoutSettings.paragraphSpacingDp.dp),
                                 color = colors.text,
                                 fontSize = readerFontSize,
@@ -2439,30 +2569,32 @@ private fun ReaderScreen(
                             )
                         }
                     }
-                    item {
-                        ReaderCommentsSection(
-                            comments = chapter.comments,
-                            input = commentInput,
-                            posting = commentPosting,
-                            colors = colors,
-                            onInputChange = { commentInput = it },
-                            onTextFillFocusChanged = {
-                                isCommentTextFillFocused = it
-                                if (it) {
-                                    onControlsVisibleChange(false)
-                                }
-                            },
-                            onSubmit = {
-                                val text = commentInput.trim()
-                                if (text.isNotBlank()) {
-                                    commentInput = ""
-                                    onPostComment(text)
-                                } else {
-                                    Toast.makeText(context, "评论不能为空", Toast.LENGTH_SHORT)
-                                        .show()
-                                }
-                            },
-                        )
+                    if (!readerLayoutSettings.hideComments) {
+                        item {
+                            ReaderCommentsSection(
+                                comments = chapter.comments.map(textConverter::convert),
+                                input = commentInput,
+                                posting = commentPosting,
+                                colors = colors,
+                                onInputChange = { commentInput = it },
+                                onTextFillFocusChanged = {
+                                    isCommentTextFillFocused = it
+                                    if (it) {
+                                        onControlsVisibleChange(false)
+                                    }
+                                },
+                                onSubmit = {
+                                    val text = commentInput.trim()
+                                    if (text.isNotBlank()) {
+                                        commentInput = ""
+                                        onPostComment(text)
+                                    } else {
+                                        Toast.makeText(context, "评论不能为空", Toast.LENGTH_SHORT)
+                                            .show()
+                                    }
+                                },
+                            )
+                        }
                     }
                 }
                 LazyListScrollbar(
@@ -2479,7 +2611,7 @@ private fun ReaderScreen(
         if (chapter != null) {
             ReaderControls(
                 visible = controlsVisible,
-                chapterTitle = chapter.chapterTitle,
+                chapterTitle = textConverter.convert(chapter.chapterTitle),
                 colors = colors,
                 darkMode = darkMode,
                 hasPrevious = chapter.previousUrl != null,
@@ -2585,7 +2717,7 @@ private fun ReaderScreen(
                             ) {
                                 itemsIndexed(chapter!!.chapters) { _, item ->
                                     ChapterListRow(
-                                        item = item,
+                                        item = item.copy(title = textConverter.convert(item.title)),
                                         selected = item.url == chapter.url,
                                         onClick = {
                                             chapterSheetVisible = false
@@ -3254,6 +3386,36 @@ private fun ReaderFontFamily.toFontFamily(): FontFamily? {
         ReaderFontFamily.SERIF -> FontFamily.Serif
         ReaderFontFamily.SANS_SERIF -> FontFamily.SansSerif
         ReaderFontFamily.MONOSPACE -> FontFamily.Monospace
+    }
+}
+
+private class ReaderTextConverter(
+    conversion: TextConversion,
+) {
+    private val transliterator = when (conversion) {
+        TextConversion.ORIGINAL -> null
+        TextConversion.SIMPLIFIED -> runCatching { Transliterator.getInstance("Traditional-Simplified") }.getOrNull()
+        TextConversion.TRADITIONAL -> runCatching { Transliterator.getInstance("Simplified-Traditional") }.getOrNull()
+    }
+
+    fun convert(text: String): String {
+        return transliterator?.transliterate(text) ?: text
+    }
+
+    fun convert(block: CommentBlock): CommentBlock {
+        if (transliterator == null) return block
+        return block.copy(
+            parts = block.parts.map { part -> part.copy(text = convert(part.text)) },
+        )
+    }
+
+    fun convert(comment: ReaderComment): ReaderComment {
+        if (transliterator == null) return comment
+        return comment.copy(
+            username = convert(comment.username),
+            content = comment.content.map(::convert),
+            quote = comment.quote.map(::convert),
+        )
     }
 }
 

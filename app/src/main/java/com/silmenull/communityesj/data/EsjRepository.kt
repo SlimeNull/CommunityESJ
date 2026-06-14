@@ -96,6 +96,8 @@ class EsjRepository(context: Context) {
         store.setReaderLayoutSettings(settings)
     }
 
+    fun cacheDisabled(): Boolean = store.getReaderLayoutSettings().disableCache
+
     fun resetDisplaySettings() {
         store.setReaderLightThemePreset(ReaderThemePreset.PAPER)
         store.setReaderDarkThemePreset(ReaderThemePreset.NIGHT)
@@ -188,57 +190,23 @@ class EsjRepository(context: Context) {
         }
         val html = executeText(baseRequest(url).get().build())
         EsjParser.parseBookshelf(html, page, selectedHost.baseUrl)
-            .also { store.saveBookshelf(it) }
+            .also { if (!cacheDisabled()) store.saveBookshelf(it) }
     }
 
     suspend fun resolveBookStart(book: BookItem): ChapterLink? = withContext(Dispatchers.IO) {
         val currentBook = book.forCurrentHost()
         val detailUrl = currentBook.detailUrl ?: return@withContext null
         val saved = store.getProgress(detailUrl)
-        val cachedChapters = store.getChapters(detailUrl)?.let(::markCached)
-        val savedCachedChapter = saved?.chapterUrl
-            ?.takeIf { store.hasChapter(it) }
-            ?.let { url ->
-                ChapterLink(
-                    title = saved.chapterTitle.ifBlank { currentBook.lastReadChapter.ifBlank { currentBook.title } },
-                    url = currentHostUrl(url),
-                    isCached = true,
-                )
-            }
-        val remoteCachedChapterWithoutList = currentBook.lastReadChapterUrl
-            ?.takeIf { store.hasChapter(it) }
-            ?.let { url ->
-                ChapterLink(
-                    title = currentBook.lastReadChapter.ifBlank { currentBook.title },
-                    url = currentHostUrl(url),
-                    isCached = true,
-                )
-            }
-        if (cachedChapters != null) {
-            val remoteCachedChapter = currentBook.lastReadChapterUrl
-                ?.let { url -> cachedChapters.firstOrNull { EsjUrl.equivalent(it.url, url) && it.isCached } }
-            val firstCachedChapter = cachedChapters.firstOrNull { it.isCached }
-            if (savedCachedChapter != null || remoteCachedChapter != null || firstCachedChapter != null) {
-                return@withContext savedCachedChapter ?: remoteCachedChapter ?: firstCachedChapter
-            }
-        }
-        if (savedCachedChapter != null || remoteCachedChapterWithoutList != null) {
-            return@withContext savedCachedChapter ?: remoteCachedChapterWithoutList
+        if (saved?.chapterUrl?.isNotBlank() == true) {
+            return@withContext ChapterLink(
+                title = saved.chapterTitle.ifBlank { currentBook.title },
+                url = currentHostUrl(saved.chapterUrl),
+                isCached = !cacheDisabled() && store.hasChapter(saved.chapterUrl),
+            )
         }
 
         val chapters = loadChapters(detailUrl, forceRefresh = false)
-        val savedChapter = saved?.chapterUrl
-            ?.takeIf { it.isNotBlank() }
-            ?.let { url ->
-                ChapterLink(
-                    title = saved.chapterTitle.ifBlank { currentBook.lastReadChapter.ifBlank { currentBook.title } },
-                    url = currentHostUrl(url),
-                    isCached = store.hasChapter(url),
-                )
-            }
-        val remoteLastReadChapter = currentBook.lastReadChapterUrl
-            ?.let { url -> chapters.firstOrNull { EsjUrl.equivalent(it.url, url) } }
-        savedChapter ?: remoteLastReadChapter ?: chapters.firstOrNull()
+        chapters.firstOrNull()
     }
 
     suspend fun loadReader(
@@ -246,7 +214,7 @@ class EsjRepository(context: Context) {
         detailUrlHint: String? = null,
         forceRefresh: Boolean = false,
     ): ReaderChapter = withContext(Dispatchers.IO) {
-        if (!forceRefresh) {
+        if (!forceRefresh && !cacheDisabled()) {
             val cached = store.getChapter(url)
             if (cached != null) {
                 val detailUrl = cached.detailUrl ?: detailUrlHint
@@ -275,7 +243,9 @@ class EsjRepository(context: Context) {
             chapters = chapters,
             detailUrl = detailUrl,
         )
-        store.saveChapter(chapter)
+        if (!cacheDisabled()) {
+            store.saveChapter(chapter)
+        }
         chapter
     }
 
@@ -319,18 +289,20 @@ class EsjRepository(context: Context) {
                 ),
             ),
         )
-        store.saveChapter(chapter.copy(comments = chapter.comments + comment))
+        if (!cacheDisabled()) {
+            store.saveChapter(chapter.copy(comments = chapter.comments + comment))
+        }
         comment
     }
 
     suspend fun loadChapters(detailUrl: String, forceRefresh: Boolean = false): List<ChapterLink> = withContext(Dispatchers.IO) {
-        if (!forceRefresh) {
+        if (!forceRefresh && !cacheDisabled()) {
             store.getChapters(detailUrl)?.let { return@withContext markCached(it) }
         }
         val currentDetailUrl = currentHostUrl(detailUrl)
         val html = executeText(baseRequest(currentDetailUrl).get().build())
         val chapters = EsjParser.parseChapters(html, currentDetailUrl)
-        if (chapters.isNotEmpty()) {
+        if (chapters.isNotEmpty() && !cacheDisabled()) {
             store.saveChapters(currentDetailUrl, chapters)
         }
         markCached(chapters)
@@ -341,6 +313,7 @@ class EsjRepository(context: Context) {
     }
 
     suspend fun prefetchNextChapters(currentUrl: String, chapters: List<ChapterLink>, count: Int = 3) = withContext(Dispatchers.IO) {
+        if (cacheDisabled()) return@withContext
         val currentIndex = chapters.indexOfFirst { EsjUrl.equivalent(it.url, currentUrl) }
         if (currentIndex < 0) return@withContext
 
@@ -365,6 +338,9 @@ class EsjRepository(context: Context) {
         knownChapters: List<ChapterLink>,
         onProgress: suspend (BookCacheProgress) -> Unit,
     ) = withContext(Dispatchers.IO) {
+        if (cacheDisabled()) {
+            throw IOException("缓存已禁用")
+        }
         val currentDetailUrl = currentHostUrl(detailUrl)
         val chapters = knownChapters
             .ifEmpty { loadChapters(currentDetailUrl, forceRefresh = false) }

@@ -197,6 +197,9 @@ class LocalStore(context: Context) {
             horizontalPaddingDp = preferences.getFloat("reader_horizontal_padding_dp", 22f).coerceIn(12f, 48f),
             shortcutPageTurnPercent = preferences.getFloat("reader_shortcut_page_turn_percent", 0.8f).coerceIn(0.1f, 1f),
             shortcutAnimationMillis = preferences.getInt("reader_shortcut_animation_millis", 300).coerceIn(100, 1000),
+            hideComments = preferences.getBoolean("reader_hide_comments", false),
+            textConversion = TextConversion.fromName(preferences.getString("reader_text_conversion", null)),
+            disableCache = preferences.getBoolean("reader_disable_cache", false),
         )
     }
 
@@ -210,6 +213,9 @@ class LocalStore(context: Context) {
             .putFloat("reader_horizontal_padding_dp", settings.horizontalPaddingDp.coerceIn(12f, 48f))
             .putFloat("reader_shortcut_page_turn_percent", settings.shortcutPageTurnPercent.coerceIn(0.1f, 1f))
             .putInt("reader_shortcut_animation_millis", settings.shortcutAnimationMillis.coerceIn(100, 1000))
+            .putBoolean("reader_hide_comments", settings.hideComments)
+            .putString("reader_text_conversion", settings.textConversion.name)
+            .putBoolean("reader_disable_cache", settings.disableCache)
             .apply()
     }
 
